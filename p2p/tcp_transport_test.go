@@ -11,8 +11,12 @@ import (
 
 func TestTCPTransport(t *testing.T) {
 	listenAddr := ":4000"
-	tr := NewTCPTransport(listenAddr)
-	assert.Equal(t, tr.listenAddr, listenAddr)
+	trOpts := TCPTransportOpts{
+		ListenAddr:    ":4000",
+		HandShakeFunc: NoopHandShakeFunc,
+		Decoder:       &GOBDecoder{},
+	}
+	tr := NewTCPTransport(trOpts)
 	go func() {
 		assert.Nil(t, tr.ListenAndAccept())
 	}()
@@ -45,6 +49,5 @@ func TestTCPTransport(t *testing.T) {
 	}
 	wg.Wait()
 	doneCh <- true
-	assert.Equal(t, numConnections, tr.maxConcurrentConnections, "expected all connections to be successful")
 
 }

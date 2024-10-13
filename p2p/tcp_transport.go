@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 )
 
 // TCPPeer represents a node in the TCP network
 type TCPNode struct {
 	conn net.Conn
-
 	// outbound if the node is making the connection to the server
 	outbound bool
 }
@@ -22,34 +20,41 @@ func NewTCPNode(conn net.Conn, outbound bool) *TCPNode {
 	}
 }
 
-// TCPTransport represents the TCP protocol
-type TCPTransport struct {
-	listenAddr string
-	listener   net.Listener
-	shakeHands HandShakeFunc
-
-	numConLock               sync.Mutex
-	numConnections           int
-	maxConcurrentConnections int
-
-	peersLock sync.RWMutex
-	peers     map[net.Addr]Node
+func (n *TCPNode) Close() error {
+	return n.conn.Close()
 }
 
-func NewTCPTransport(listenAddr string) *TCPTransport {
+type TCPTransportOpts struct {
+	ListenAddr    string
+	HandShakeFunc HandShakeFunc
+	Decoder       Decoder
+	HandleNewNode HandleNewNode
+}
+
+// TCPTransport represents the TCP protocol
+type TCPTransport struct {
+	TCPTransportOpts TCPTransportOpts
+	listener         net.Listener
+	rpcChan          chan RPC
+}
+
+func NewTCPTransport(opts TCPTransportOpts) *TCPTransport {
 	return &TCPTransport{
-		listenAddr: listenAddr,
-		shakeHands: func(any) error {
-			return nil
-		},
-		numConnections:           0,
-		maxConcurrentConnections: 0,
+		TCPTransportOpts: opts,
+		rpcChan:          make(chan RPC),
 	}
+}
+
+// Consume implements the Transport interface, returning a read only RPC channel.
+// Used for reading incoming RPC messages sent from other nodes in network
+func (t *TCPTransport) Consume() <-chan RPC {
+	return t.rpcChan
+
 }
 
 func (t *TCPTransport) ListenAndAccept() error {
 	var err error
-	t.listener, err = net.Listen("tcp", t.listenAddr)
+	t.listener, err = net.Listen("tcp", t.TCPTransportOpts.ListenAddr)
 	if err != nil {
 		return err
 	}
@@ -71,31 +76,39 @@ func (t *TCPTransport) startAcceptLoop() {
 
 // startReadLoop will read data from tcp connection
 func (t *TCPTransport) startReadLoop(conn net.Conn) {
-	fmt.Printf("new incoming connection %+v\n", conn)
-	go func() {
-		t.numConLock.Lock()
-		defer t.numConLock.Unlock()
-		t.numConnections += 1
-		t.maxConcurrentConnections = max(t.maxConcurrentConnections, t.numConnections)
-
+	var err error
+	defer func() {
+		fmt.Printf("closed peer connection: %v\n", err)
+		conn.Close()
 	}()
 	peerNode := NewTCPNode(conn, true)
-	buffer := make([]byte, 4096)
+	// MUST shake hands before reading
+	if err = t.TCPTransportOpts.HandShakeFunc(peerNode); err != nil {
+		return
+	}
+	// IF provided HandleNode function errors, we close the connection
+	if t.TCPTransportOpts.HandleNewNode != nil {
+		if err = t.TCPTransportOpts.HandleNewNode(peerNode); err != nil {
+			return
+		}
+	}
+
+	rpc := RPC{}
 	for {
-		n, err := peerNode.conn.Read(buffer)
+		err := t.TCPTransportOpts.Decoder.Decode(peerNode.conn, &rpc)
 		if err != nil {
 			if err == io.EOF {
-				fmt.Printf("connection ended: %+v\n", conn)
-				go func() {
-					t.numConLock.Lock()
-					defer t.numConLock.Unlock()
-					t.numConnections -= 1
-				}()
 				break
 			}
-			fmt.Printf("err reading from connection: %s\n", err)
+			if opErr, ok := err.(*net.OpError); ok {
+				err = opErr
+				fmt.Printf("%v", err)
+				return
+			}
+			fmt.Printf("err reading from connection: %T\n", err)
 		}
-		fmt.Println(string(buffer[:n]))
+		rpc.From = conn.RemoteAddr()
+		t.rpcChan <- rpc
 	}
 
 }
