@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha1"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -16,23 +15,32 @@ import (
 type FileAddress struct {
 	PathName string
 	FileName string
+	FileHash hash.Hash
 }
 
 func (f *FileAddress) FullPath() string {
 	return f.PathName + f.FileName
 }
 
-// LocateFile turns a hash into a FileAdress
-type LocateFile func(hash hash.Hash, blockSize int) FileAddress
+// CreateAddress creates a Fileaddress given the contents of a file
+type CreateAddress func(r io.Reader, blockSize int) (FileAddress, error)
+type GetAddress func(key hash.Hash, blockSize int) (FileAddress, error)
 
-// CASPathTransform hashes a key (filename) into a path.
+// CASPathTransform hashes a key (filename) into its expected path.
 // FileAddress may not exist on file system.
-func CASLocate(key hash.Hash, blockSize int) FileAddress {
+func CASCreateAddress(r io.Reader, blockSize int) (FileAddress, error) {
+	hash := sha1.New()
+	_, err := io.Copy(hash, r)
+	if err != nil {
+		return FileAddress{}, err
+	}
+	return CASGetAddress(hash, blockSize)
+}
+
+func CASGetAddress(key hash.Hash, blockSize int) (FileAddress, error) {
 	hashStr := hex.EncodeToString(key.Sum(nil))
-	fmt.Println(len(hashStr))
 	directoryDepth := len(hashStr) / blockSize
 	paths := make([]string, directoryDepth)
-
 	for i := 0; i < directoryDepth; i++ {
 		from, to := i*blockSize, (i*blockSize)+blockSize
 		paths[i] = hashStr[from:to]
@@ -50,12 +58,15 @@ func CASLocate(key hash.Hash, blockSize int) FileAddress {
 	return FileAddress{
 		PathName: pathStr,
 		FileName: hashStr,
-	}
+		FileHash: key,
+	}, nil
+
 }
 
 type StoreOpts struct {
-	LocateFile LocateFile
-	blockSize  int
+	CreateAddress CreateAddress
+	GetAddress    GetAddress
+	blockSize     int
 }
 
 type Store struct {
@@ -70,46 +81,51 @@ func NewStore(opts StoreOpts) *Store {
 
 // readStream reads a file from a Hash
 func (s *Store) readStream(key hash.Hash) (io.Reader, error) {
-	address := s.LocateFile(key, s.blockSize)
+	address, err := s.GetAddress(key, s.blockSize)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.Open(address.FullPath())
 	if err != nil {
-		return nil, errors.New(fmt.Sprint("could not find key %s", key))
+		return nil, fmt.Errorf("could not find key %s", key)
 	}
 	return f, nil
 }
 
 // writeStream writes a file into our CAS.
-func (s *Store) writeStream(r io.Reader) error {
-	hash := sha1.New()
-	rCopy := new(bytes.Buffer)
-	mw := io.MultiWriter(hash, rCopy)
-	_, err := io.Copy(mw, r)
+func (s *Store) writeStream(r io.Reader) (hash.Hash, error) {
+	var buf1, buf2 bytes.Buffer
+	r = io.TeeReader(r, io.MultiWriter(&buf1, &buf2))
+	_, err := io.Copy(&buf1, r)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	// Use io.TeeReader to write the data to the hash and pass it through
-	// Create the address after hashing and before writing
-	address := s.LocateFile(hash, s.blockSize)
+
+	address, err := s.CreateAddress(&buf1, s.blockSize)
+	if err != nil {
+		return nil, err
+	}
+
 	fmt.Println(address.FullPath())
 
 	// Create necessary directories
 	if err := os.MkdirAll(address.PathName, fs.ModePerm); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Create the file and copy the stream to it
 	f, err := os.Create(address.FullPath())
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 
 	// Now copy the teeReader to the file, which will also update the hash
-	n, err := io.Copy(f, rCopy)
+	n, err := io.Copy(f, &buf2)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	fmt.Printf("wrote %d bytes to disk, %s\n", n, address.FileName)
-	return nil
+	return address.FileHash, nil
 }

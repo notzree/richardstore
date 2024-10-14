@@ -2,31 +2,52 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"fmt"
+	"io"
+	"os"
+	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-// func TestPathTransformFunc(t *testing.T) {
-// 	key := "momsbestpicture"
-// 	const BLOCKSIZE = 5
-// 	pathName := CASLocate(key, BLOCKSIZE)
-// 	split := strings.Split(pathName, "/")
-// 	for _, dir := range split {
-// 		assert.Equal(t, len(dir), BLOCKSIZE)
-// 	}
-// }
+func TestCreateAddressFunc(t *testing.T) {
+	content := strings.NewReader("momsbestpicture")
+	hash := sha1.New()
+	_, err := io.Copy(hash, content)
+	if err != nil {
+		panic(err)
+	}
+	const BLOCKSIZE = 5
+	fileAddress, err := CASGetAddress(hash, BLOCKSIZE)
+	if err != nil {
+		panic(err)
+	}
+	split := strings.Split(fileAddress.PathName, "/")
+	for _, dir := range split {
+		assert.Equal(t, len(dir), BLOCKSIZE)
+	}
+}
 
 func TestStore(t *testing.T) {
-	fileName := "hurhurhur"
 	opts := StoreOpts{
-		LocateFile: CASLocate,
-		blockSize:  5,
+		CreateAddress: CASCreateAddress,
+		GetAddress:    CASGetAddress,
+		blockSize:     5,
 	}
 	s := NewStore(opts)
 
 	data := bytes.NewBuffer([]byte("cringe nft12222"))
-	err := s.writeStream(fileName, data)
+	hash, err := s.writeStream(data)
 	if err != nil {
 		t.Error(err)
 	}
+	r, err := s.readStream(hash)
+	if err != nil {
+		t.Error(err)
+	}
+	fmt.Println("Read data:")
+	io.Copy(os.Stdout, r)
 
 }
