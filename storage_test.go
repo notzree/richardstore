@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha1"
 	"fmt"
 	"io"
 	"os"
@@ -13,14 +12,9 @@ import (
 )
 
 func TestCreateAddressFunc(t *testing.T) {
-	content := strings.NewReader("momsbestpicture")
-	hash := sha1.New()
-	_, err := io.Copy(hash, content)
-	if err != nil {
-		panic(err)
-	}
+	content := "momsbestpicture"
 	const BLOCKSIZE = 5
-	fileAddress, err := CASGetAddress(hash, BLOCKSIZE)
+	fileAddress, err := CASGetAddress(content, BLOCKSIZE)
 	if err != nil {
 		panic(err)
 	}
