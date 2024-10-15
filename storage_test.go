@@ -2,9 +2,9 @@ package main
 
 import (
 	"bytes"
-	"fmt"
+	"crypto/sha1"
+	"encoding/hex"
 	"io"
-	"os"
 	"strings"
 	"testing"
 
@@ -13,8 +13,12 @@ import (
 
 func TestCreateAddressFunc(t *testing.T) {
 	content := "momsbestpicture"
+	buf := bytes.NewBuffer([]byte(content))
+	hash := sha1.New()
+	io.Copy(hash, buf)
+	hashStr := hex.EncodeToString(hash.Sum(nil))
 	const BLOCKSIZE = 5
-	fileAddress, err := CASGetAddress(content, BLOCKSIZE)
+	fileAddress, err := CASGetAddress(hashStr, BLOCKSIZE)
 	if err != nil {
 		panic(err)
 	}
@@ -31,17 +35,27 @@ func TestStore(t *testing.T) {
 		blockSize:     5,
 	}
 	s := NewStore(opts)
-
-	data := bytes.NewBuffer([]byte("cringe nft12222"))
-	hash, err := s.writeStream(data)
+	data := []byte("cringe nft12222")
+	buf := bytes.NewBuffer(data)
+	// test write
+	hash, err := s.writeStream(buf)
 	if err != nil {
 		t.Error(err)
 	}
+	// test read
 	r, err := s.readStream(hash)
 	if err != nil {
 		t.Error(err)
 	}
-	fmt.Println("Read data:")
-	io.Copy(os.Stdout, r)
+	readData, err := io.ReadAll(r)
+	if err != nil {
+		t.Error(err)
+	}
+	assert.Equal(t, readData, data)
+	// test delete
+	err = s.Delete(hash)
+	if err != nil {
+		t.Error(err)
+	}
 
 }

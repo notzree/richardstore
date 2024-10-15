@@ -8,7 +8,9 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 type FileAddress struct {
@@ -17,7 +19,7 @@ type FileAddress struct {
 }
 
 func (f *FileAddress) FullPath() string {
-	return f.PathName + f.FileName
+	return f.PathName + "/" + f.FileName
 }
 
 // CreateAddress creates an address from a reader
@@ -54,7 +56,6 @@ func CASGetAddress(hashStr string, blockSize int) (FileAddress, error) {
 	}
 
 	pathStr := strings.Join(paths, "/")
-
 	return FileAddress{
 		PathName: pathStr,
 		FileName: hashStr,
@@ -66,6 +67,7 @@ type StoreOpts struct {
 	CreateAddress CreateAddress
 	GetAddress    GetAddress
 	blockSize     int
+	root          string
 }
 
 type Store struct {
@@ -73,9 +75,47 @@ type Store struct {
 }
 
 func NewStore(opts StoreOpts) *Store {
+	if opts.root == "" {
+		// If no root is specified, use the current working directory
+		cwd, err := os.Getwd()
+		if err != nil {
+			panic(err)
+		}
+		opts.root = cwd
+	}
 	return &Store{
 		StoreOpts: opts,
 	}
+}
+
+func (s *Store) Delete(key string) error {
+	path, err := s.GetAddress(key, s.blockSize)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path.FullPath())
+	fmt.Println("full path:", dir)
+	err = os.Remove(path.FullPath())
+	if err != nil {
+		return err
+	}
+	for dir != "." {
+		err = os.Remove(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Directory already deleted, continue to parent
+				dir = filepath.Dir(dir)
+				continue
+			}
+			if err, ok := err.(*os.PathError); ok && err.Err == syscall.ENOTEMPTY {
+				// Directory not empty, stop here
+				break
+			}
+			return err
+		}
+		dir = filepath.Dir(dir)
+	}
+	return nil
 }
 
 func (s *Store) Read(key string) (io.Reader, error) {
