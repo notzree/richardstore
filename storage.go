@@ -23,24 +23,24 @@ func (f *FileAddress) FullPath() string {
 }
 
 // CreateAddress creates an address from a reader
-type CreateAddress func(r io.Reader, blockSize int) (FileAddress, error)
+type CreateAddress func(r io.Reader, blockSize int, root string) (FileAddress, error)
 
 // GetAddress gets the address from a hash
-type GetAddress func(key string, blockSize int) (FileAddress, error)
+type GetAddress func(key string, blockSize int, root string) (FileAddress, error)
 
 // CASPathTransform hashes a key (filename) into its expected path.
 // FileAddress may not exist on file system.
-func CASCreateAddress(r io.Reader, blockSize int) (FileAddress, error) {
+func CASCreateAddress(r io.Reader, blockSize int, root string) (FileAddress, error) {
 	hash := sha1.New()
 	_, err := io.Copy(hash, r)
 	if err != nil {
 		return FileAddress{}, err
 	}
 	hashStr := hex.EncodeToString(hash.Sum(nil))
-	return CASGetAddress(hashStr, blockSize)
+	return CASGetAddress(hashStr, blockSize, root)
 }
 
-func CASGetAddress(hashStr string, blockSize int) (FileAddress, error) {
+func CASGetAddress(hashStr string, blockSize int, root string) (FileAddress, error) {
 	directoryDepth := len(hashStr) / blockSize
 	paths := make([]string, directoryDepth)
 	for i := 0; i < directoryDepth; i++ {
@@ -55,7 +55,8 @@ func CASGetAddress(hashStr string, blockSize int) (FileAddress, error) {
 		paths[len(paths)-1] = paths[len(paths)-1] + hashStr[nRead:nRead+leftOver]
 	}
 
-	pathStr := strings.Join(paths, "/")
+	joinedPaths := strings.Join(paths, "/")
+	pathStr := filepath.Join(root, joinedPaths)
 	return FileAddress{
 		PathName: pathStr,
 		FileName: hashStr,
@@ -89,7 +90,7 @@ func NewStore(opts StoreOpts) *Store {
 }
 
 func (s *Store) Delete(key string) error {
-	path, err := s.GetAddress(key, s.blockSize)
+	path, err := s.GetAddress(key, s.blockSize, s.root)
 	if err != nil {
 		return err
 	}
@@ -108,7 +109,7 @@ func (s *Store) Delete(key string) error {
 				continue
 			}
 			if err, ok := err.(*os.PathError); ok && err.Err == syscall.ENOTEMPTY {
-				// Directory not empty, stop here
+				// Directory not empty, return
 				break
 			}
 			return err
@@ -131,7 +132,7 @@ func (s *Store) Read(key string) (io.Reader, error) {
 
 // readStream reads a file from a Hash
 func (s *Store) readStream(key string) (io.ReadCloser, error) {
-	address, err := s.GetAddress(key, s.blockSize)
+	address, err := s.GetAddress(key, s.blockSize, s.root)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +148,7 @@ func (s *Store) writeStream(r io.Reader) (string, error) {
 		return "", err
 	}
 
-	address, err := s.CreateAddress(&buf1, s.blockSize)
+	address, err := s.CreateAddress(&buf1, s.blockSize, s.root)
 	if err != nil {
 		return "", err
 	}

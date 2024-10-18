@@ -18,12 +18,13 @@ func TestCreateAddressFunc(t *testing.T) {
 	io.Copy(hash, buf)
 	hashStr := hex.EncodeToString(hash.Sum(nil))
 	const BLOCKSIZE = 5
-	fileAddress, err := CASGetAddress(hashStr, BLOCKSIZE)
+	fileAddress, err := CASGetAddress(hashStr, BLOCKSIZE, "root")
 	if err != nil {
 		panic(err)
 	}
 	split := strings.Split(fileAddress.PathName, "/")
-	for _, dir := range split {
+
+	for _, dir := range split[1:] { // skip the first root directory as it can be named anything
 		assert.Equal(t, len(dir), BLOCKSIZE)
 	}
 }
@@ -33,6 +34,7 @@ func TestStore(t *testing.T) {
 		CreateAddress: CASCreateAddress,
 		GetAddress:    CASGetAddress,
 		blockSize:     5,
+		root:          "root",
 	}
 	s := NewStore(opts)
 	data := []byte("cringe nft12222")
