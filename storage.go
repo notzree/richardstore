@@ -15,11 +15,11 @@ import (
 
 type FileAddress struct {
 	PathName string
-	FileName string
+	HashStr  string
 }
 
 func (f *FileAddress) FullPath() string {
-	return f.PathName + "/" + f.FileName
+	return f.PathName + "/" + f.HashStr
 }
 
 // CreateAddress creates an address from a reader
@@ -30,6 +30,7 @@ type GetAddress func(key string, blockSize int, root string) (FileAddress, error
 
 // CASPathTransform hashes a key (filename) into its expected path.
 // FileAddress may not exist on file system.
+// Always root + "/" + created_path
 func CASCreateAddress(r io.Reader, blockSize int, root string) (FileAddress, error) {
 	hash := sha1.New()
 	_, err := io.Copy(hash, r)
@@ -40,6 +41,8 @@ func CASCreateAddress(r io.Reader, blockSize int, root string) (FileAddress, err
 	return CASGetAddress(hashStr, blockSize, root)
 }
 
+// CASGetAddress separates a HashStr into a FileAddress based on blocksize (max size of 1 directory name)
+// and root
 func CASGetAddress(hashStr string, blockSize int, root string) (FileAddress, error) {
 	directoryDepth := len(hashStr) / blockSize
 	paths := make([]string, directoryDepth)
@@ -50,7 +53,7 @@ func CASGetAddress(hashStr string, blockSize int, root string) (FileAddress, err
 	nRead := directoryDepth * blockSize
 	leftOver := len(hashStr) - nRead
 
-	// TODO: Fix hacky approach, last directory may be up to 2*blockSize-1 long
+	// TODO: Fix hacky approach currently last directory may be up to 2*blockSize-1 long
 	if leftOver != 0 {
 		paths[len(paths)-1] = paths[len(paths)-1] + hashStr[nRead:nRead+leftOver]
 	}
@@ -59,7 +62,7 @@ func CASGetAddress(hashStr string, blockSize int, root string) (FileAddress, err
 	pathStr := filepath.Join(root, joinedPaths)
 	return FileAddress{
 		PathName: pathStr,
-		FileName: hashStr,
+		HashStr:  hashStr,
 	}, nil
 
 }
@@ -142,7 +145,7 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 // writeStream writes a file into our CAS.
 func (s *Store) writeStream(r io.Reader) (string, error) {
 	var buf1, buf2 bytes.Buffer
-	r = io.TeeReader(r, io.MultiWriter(&buf1, &buf2))
+	r = io.TeeReader(r, io.MultiWriter(&buf1, &buf2)) // using teeReader to 'clone' the file to read twice (once for hash, another to save it)
 	_, err := io.Copy(&buf1, r)
 	if err != nil {
 		return "", err
@@ -152,8 +155,6 @@ func (s *Store) writeStream(r io.Reader) (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	fmt.Println(address.FullPath())
 
 	// Create necessary directories
 	if err := os.MkdirAll(address.PathName, fs.ModePerm); err != nil {
@@ -167,12 +168,11 @@ func (s *Store) writeStream(r io.Reader) (string, error) {
 	}
 	defer f.Close()
 
-	// Now copy the teeReader to the file, which will also update the hash
 	n, err := io.Copy(f, &buf2)
 	if err != nil {
 		return "", err
 	}
 
-	fmt.Printf("wrote %d bytes to disk, %s\n", n, address.FileName)
-	return address.FileName, nil
+	fmt.Printf("wrote %d bytes to disk, %s\n", n, address.HashStr)
+	return address.HashStr, nil
 }
