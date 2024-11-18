@@ -92,6 +92,7 @@ func NewStore(opts StoreOpts) *Store {
 	}
 }
 
+// Delete removes the file and any empty sub-directories given a hash
 func (s *Store) Delete(key string) error {
 	path, err := s.GetAddress(key, s.blockSize, s.root)
 	if err != nil {
@@ -99,11 +100,13 @@ func (s *Store) Delete(key string) error {
 	}
 	dir := filepath.Dir(path.FullPath())
 	fmt.Println("full path:", dir)
+	// delete file
 	err = os.Remove(path.FullPath())
 	if err != nil {
 		return err
 	}
-	for dir != "." {
+	// remove empty directories excluding root directory
+	for dir != s.root {
 		err = os.Remove(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
