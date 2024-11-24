@@ -148,12 +148,6 @@ func (s *Store) Read(key string) (io.Reader, error) {
 	return buf, err
 }
 
-// Clear deletes the root and all subdirectories
-func (s *Store) Clear() error {
-	return os.RemoveAll(s.root)
-
-}
-
 // readStream reads a file from a Hash
 func (s *Store) readStream(key string) (io.ReadCloser, error) {
 	address, err := s.GetAddress(key, s.blockSize, s.root)
@@ -161,6 +155,10 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 		return nil, err
 	}
 	return os.Open(address.FullPath())
+}
+
+func (s *Store) Write(r io.Reader) (string, error) {
+	return s.writeStream(r)
 }
 
 // writeStream writes a file into our CAS.
@@ -196,4 +194,9 @@ func (s *Store) writeStream(r io.Reader) (string, error) {
 
 	fmt.Printf("wrote %d bytes to disk, %s\n", n, address.HashStr)
 	return address.HashStr, nil
+}
+
+// Clear deletes the root and all subdirectories
+func (s *Store) Clear() error {
+	return os.RemoveAll(s.root)
 }

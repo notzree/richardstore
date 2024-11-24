@@ -45,7 +45,7 @@ func TestStore(t *testing.T) {
 	data := []byte("cringe nft12222")
 	buf := bytes.NewBuffer(data)
 	// test write
-	hash, err := s.writeStream(buf)
+	hash, err := s.Write(buf)
 	if err != nil {
 		t.Error(err)
 	}
