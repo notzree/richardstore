@@ -41,6 +41,7 @@ func TestStore(t *testing.T) {
 		root:          "root",
 	}
 	s := NewStore(opts)
+	defer teardown(t, s)
 	data := []byte("cringe nft12222")
 	buf := bytes.NewBuffer(data)
 	// test write
@@ -68,5 +69,10 @@ func TestStore(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+}
 
+func teardown(t *testing.T, store *Store) {
+	if err := store.Clear(); err != nil {
+		t.Error(err)
+	}
 }

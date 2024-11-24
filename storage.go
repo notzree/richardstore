@@ -148,6 +148,12 @@ func (s *Store) Read(key string) (io.Reader, error) {
 	return buf, err
 }
 
+// Clear deletes the root and all subdirectories
+func (s *Store) Clear() error {
+	return os.RemoveAll(s.root)
+
+}
+
 // readStream reads a file from a Hash
 func (s *Store) readStream(key string) (io.ReadCloser, error) {
 	address, err := s.GetAddress(key, s.blockSize, s.root)
