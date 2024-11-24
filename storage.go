@@ -18,6 +18,7 @@ type FileAddress struct {
 	HashStr  string
 }
 
+// FullPath returns the full path to the file including the root directory
 func (f *FileAddress) FullPath() string {
 	return f.PathName + "/" + f.HashStr
 }
@@ -123,6 +124,17 @@ func (s *Store) Delete(key string) error {
 		dir = filepath.Dir(dir)
 	}
 	return nil
+}
+
+// Has checks if the Storage object has stored a key before
+func (s *Store) Has(key string) bool {
+	address, err := s.GetAddress(key, s.blockSize, s.root)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(address.FullPath())
+	return err == nil
+
 }
 
 func (s *Store) Read(key string) (io.Reader, error) {

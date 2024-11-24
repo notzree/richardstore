@@ -53,6 +53,11 @@ func TestStore(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
+	exists := s.Has(hash)
+	if !exists {
+		t.Errorf("expected to have key %s", hash)
+	}
+
 	readData, err := io.ReadAll(r)
 	if err != nil {
 		t.Error(err)
