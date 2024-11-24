@@ -7,4 +7,4 @@ run: build
 	@$$(pwd)/bin/rs
 
 test:
-	go test ./... -v 
+	go test ./... 
