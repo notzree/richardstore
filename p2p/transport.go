@@ -11,6 +11,8 @@ type HandleNewNode func(Node) error
 
 // Transport is any protocol that handles communication between 2 nodes in network
 type Transport interface {
+	Dial(string) error
 	ListenAndAccept() error
 	Consume() <-chan RPC // read only channel
+	Close() error
 }

@@ -8,7 +8,7 @@ import (
 // TODO: Im' 90% sure this Decoder message should read from the reader until it forms a complete packet and then
 // Read it into the RPC struct.
 type Decoder interface {
-	Decode(io.Reader, *RPC) error // instead of []bytes you can just straight decode form a reader. Saves 1 decode from reader -> bytes -> Decoder
+	Decode(io.Reader, *RPC) error // instead of []bytes you can just straight decode from a reader. Saves 1 decode from reader -> bytes -> Decoder
 }
 
 type GOBDecoder struct {

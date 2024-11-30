@@ -1,8 +1,10 @@
 package p2p
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 )
 
@@ -45,11 +47,25 @@ func NewTCPTransport(opts TCPTransportOpts) *TCPTransport {
 	}
 }
 
+// Dial will dial an addr and start reading data from it.
+func (t *TCPTransport) Dial(addr string) error {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
+	}
+	go t.handleConn(conn, true)
+	return nil
+}
+
 // Consume implements the Transport interface, returning a read only RPC channel.
 // Used for reading incoming RPC messages sent from other nodes in network
 func (t *TCPTransport) Consume() <-chan RPC {
 	return t.rpcChan
+}
 
+// Close implements Transport interface
+func (t *TCPTransport) Close() error {
+	return t.listener.Close()
 }
 
 func (t *TCPTransport) ListenAndAccept() error {
@@ -58,7 +74,8 @@ func (t *TCPTransport) ListenAndAccept() error {
 	if err != nil {
 		return err
 	}
-	t.startAcceptLoop()
+	go t.startAcceptLoop()
+	log.Printf("TCP Transport listening on port: %s\n", t.listener.Addr())
 	return nil
 
 }
@@ -66,22 +83,26 @@ func (t *TCPTransport) ListenAndAccept() error {
 func (t *TCPTransport) startAcceptLoop() {
 	for {
 		conn, err := t.listener.Accept()
+		if errors.Is(err, net.ErrClosed) {
+			return
+		}
 		if err != nil {
 			fmt.Printf("tcp connection err: %s\n", err)
 			continue
 		}
-		go t.startReadLoop(conn)
+		// Accepting == inbound
+		go t.handleConn(conn, false)
 	}
 }
 
-// startReadLoop will read data from tcp connection
-func (t *TCPTransport) startReadLoop(conn net.Conn) {
+// handleConn will read data from tcp connection
+func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 	var err error
 	defer func() {
 		fmt.Printf("closed peer connection: %v\n", err)
 		conn.Close()
 	}()
-	peerNode := NewTCPNode(conn, true)
+	peerNode := NewTCPNode(conn, outbound)
 	// MUST shake hands before reading
 	if err = t.TCPTransportOpts.HandShakeFunc(peerNode); err != nil {
 		return
@@ -92,7 +113,7 @@ func (t *TCPTransport) startReadLoop(conn net.Conn) {
 			return
 		}
 	}
-
+	log.Printf("local: %s | remote: %s", conn.LocalAddr(), conn.RemoteAddr())
 	rpc := RPC{}
 	for {
 		err := t.TCPTransportOpts.Decoder.Decode(peerNode.conn, &rpc)
