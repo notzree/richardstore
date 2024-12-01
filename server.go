@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/notzree/richardstore/p2p"
 )
@@ -18,6 +20,8 @@ type FileServer struct {
 	store          *Store
 	transport      p2p.Transport
 	quitch         chan struct{}
+	peerLock       sync.Mutex
+	peers          map[string]p2p.Node
 }
 
 func NewFileServer(opts FileServerOpts) *FileServer {
@@ -26,14 +30,20 @@ func NewFileServer(opts FileServerOpts) *FileServer {
 		transport:      p2p.NewTCPTransport(opts.TransportOpts),
 		quitch:         make(chan struct{}),
 		BootstrapNodes: opts.BootstrapNodes,
+		peerLock:       sync.Mutex{},
+		peers:          make(map[string]p2p.Node),
 	}
 }
 
 func (s *FileServer) bootstrapNetwork() error {
 	for _, addr := range s.BootstrapNodes {
+		if len(addr) == 0 {
+			continue
+		}
 		log.Println("dialing: ", addr)
 		go func(addr string) {
-			if err := s.transport.Dial(addr); err != nil {
+			ctx := context.Background()
+			if err := s.transport.Dial(ctx, addr); err != nil {
 				log.Printf("error dialing %s: %v \n", addr, err)
 			}
 		}(addr)
@@ -44,6 +54,28 @@ func (s *FileServer) bootstrapNetwork() error {
 
 func (s *FileServer) Stop() {
 	close(s.quitch)
+}
+func (s *FileServer) handleEvents(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		//receive an event
+		case event := <-s.transport.Events():
+			switch event.EventType {
+			case p2p.EventTypeNodeNew:
+				err := s.HandleNewNode(event.RemoteNode)
+				event.ResponseCh <- err
+			}
+			//TODO: add more event types as needed
+
+		}
+	}
+}
+
+func (s *FileServer) HandleNewNode(node p2p.Node) error {
+	fmt.Println("handling new node")
+	return nil
 }
 
 func (s *FileServer) Loop() {
@@ -63,9 +95,12 @@ func (s *FileServer) Loop() {
 }
 
 func (s *FileServer) Start() error {
-	if err := s.transport.ListenAndAccept(); err != nil {
+	rootContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := s.transport.ListenAndAccept(rootContext); err != nil {
 		return err
 	}
+	go s.handleEvents(rootContext)
 	s.bootstrapNetwork()
 	s.Loop()
 	return nil

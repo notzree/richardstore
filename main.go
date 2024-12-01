@@ -2,47 +2,13 @@ package main
 
 import (
 	"log"
-	"time"
 
 	"github.com/notzree/richardstore/p2p"
 )
 
-func MockHandleNode(node p2p.Node) error {
-	// fmt.Printf("new incoming connection %v\n", node)
-	node.Close()
-	return nil
-}
+func makeServer(listenAddr string, nodes ...string) *FileServer {
 
-func main() {
-	// go func() {
-	// 	listenAddr2 := ":3000"
-	// 	fileServerOpts2 := FileServerOpts{
-	// 		StoreOpts: StoreOpts{
-	// 			root:          listenAddr2 + "_network",
-	// 			CreateAddress: CASCreateAddress,
-	// 			GetAddress:    CASGetAddress,
-	// 		},
-	// 		TransportOpts: p2p.TCPTransportOpts{
-	// 			ListenAddr:    listenAddr2,
-	// 			HandShakeFunc: p2p.NoopHandShakeFunc,
-	// 			Decoder:       &p2p.GOBDecoder{},
-	// 			// HandleNewNode: ,
-	// 			//TODO: add HandleNewNode func
-	// 		},
-	// 	}
-	// 	fs2 := NewFileServer(fileServerOpts2)
-	// 	go func() {
-	// 		time.Sleep(time.Second * 3)
-	// 		fs2.Stop()
-	// 	}()
-	// 	if err := fs2.Start(); err != nil {
-	// 		log.Fatal(err)
-	// 	}
-
-	// }()
-	listenAddr := ":4000"
-
-	fileServerOpts := FileServerOpts{
+	fileServerOpts2 := FileServerOpts{
 		StoreOpts: StoreOpts{
 			root:          listenAddr + "_network",
 			CreateAddress: CASCreateAddress,
@@ -55,16 +21,20 @@ func main() {
 			// HandleNewNode: ,
 			//TODO: add HandleNewNode func
 		},
-		BootstrapNodes: []string{":3000"},
+		BootstrapNodes: nodes,
 	}
+	return NewFileServer(fileServerOpts2)
+}
 
-	fs := NewFileServer(fileServerOpts)
+func main() {
+	fs1 := makeServer(":4000")
 	go func() {
-		time.Sleep(time.Second * 3)
-		fs.Stop()
+		log.Fatal(fs1.Start())
 	}()
-
-	if err := fs.Start(); err != nil {
-		log.Fatal(err)
-	}
+	fs2 := makeServer(":3000", ":4000")
+	log.Fatal(fs2.Start())
+	defer func() {
+		fs1.quitch <- struct{}{}
+		fs2.quitch <- struct{}{}
+	}()
 }

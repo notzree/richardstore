@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"context"
 	"net"
 	"sync"
 	"testing"
@@ -17,8 +18,9 @@ func TestTCPTransport(t *testing.T) {
 		Decoder:       &GOBDecoder{},
 	}
 	tr := NewTCPTransport(trOpts)
+	ctx := context.Background()
 	go func() {
-		assert.Nil(t, tr.ListenAndAccept())
+		assert.Nil(t, tr.ListenAndAccept(ctx))
 	}()
 	time.Sleep(100 * time.Millisecond)
 
