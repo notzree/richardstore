@@ -13,66 +13,22 @@ import (
 	"syscall"
 )
 
-type FileAddress struct {
-	PathName string
-	HashStr  string
+type StorageStateMachine struct {
+	Storer Store
 }
 
-// FullPath returns the full path to the file including the root directory
-func (f *FileAddress) FullPath() string {
-	return f.PathName + "/" + f.HashStr
-}
-
-// CreateAddress creates an address from a reader
-type CreateAddress func(r io.Reader, blockSize int, root string) (FileAddress, error)
-
-// GetAddress gets the address from a hash
-type GetAddress func(key string, blockSize int, root string) (FileAddress, error)
-
-// CASPathTransform hashes a key (filename) into its expected path.
-// FileAddress may not exist on file system.
-// Always root + "/" + created_path
-func CASCreateAddress(r io.Reader, blockSize int, root string) (FileAddress, error) {
-	hash := sha1.New()
-	_, err := io.Copy(hash, r)
-	if err != nil {
-		return FileAddress{}, err
+func (s *StorageStateMachine) Apply(cmd Command) ApplyResult {
+	switch cmd.Type {
+	case CommandWrite:
+	//todo:
+	case CommandDelete:
+		//todo:
 	}
-	hashStr := hex.EncodeToString(hash.Sum(nil))
-	return CASGetAddress(hashStr, blockSize, root)
-}
-
-// CASGetAddress separates a HashStr into a FileAddress based on blocksize (max size of 1 directory name)
-// and root
-func CASGetAddress(hashStr string, blockSize int, root string) (FileAddress, error) {
-	directoryDepth := len(hashStr) / blockSize
-	paths := make([]string, directoryDepth)
-	for i := 0; i < directoryDepth; i++ {
-		from, to := i*blockSize, (i*blockSize)+blockSize
-		paths[i] = hashStr[from:to]
-	}
-	nRead := directoryDepth * blockSize
-	leftOver := len(hashStr) - nRead
-
-	// TODO: Fix hacky approach currently last directory may be up to 2*blockSize-1 long
-	if leftOver != 0 {
-		paths[len(paths)-1] = paths[len(paths)-1] + hashStr[nRead:nRead+leftOver]
-	}
-
-	joinedPaths := strings.Join(paths, "/")
-	pathStr := filepath.Join(root, joinedPaths)
-	return FileAddress{
-		PathName: pathStr,
-		HashStr:  hashStr,
-	}, nil
-
 }
 
 type StoreOpts struct {
-	CreateAddress CreateAddress
-	GetAddress    GetAddress
-	blockSize     int
-	root          string
+	blockSize int
+	root      string
 }
 
 type Store struct {
@@ -93,9 +49,48 @@ func NewStore(opts StoreOpts) *Store {
 	}
 }
 
+// CASPathTransform hashes a key (filename) into its expected path.
+// FileAddress may not exist on file system.
+// Always root + "/" + created_path
+func (s *Store) CreateAddress(r io.Reader) (FileAddress, error) {
+	hash := sha1.New()
+	_, err := io.Copy(hash, r)
+	if err != nil {
+		return FileAddress{}, err
+	}
+	hashStr := hex.EncodeToString(hash.Sum(nil))
+	return s.GetAddress(hashStr)
+}
+
+// CASGetAddress separates a HashStr into a FileAddress based on blocksize (max size of 1 directory name)
+// and root
+func (s *Store) GetAddress(hashStr string) (FileAddress, error) {
+	directoryDepth := len(hashStr) / s.blockSize
+	paths := make([]string, directoryDepth)
+	for i := 0; i < directoryDepth; i++ {
+		from, to := i*s.blockSize, (i*s.blockSize)+s.blockSize
+		paths[i] = hashStr[from:to]
+	}
+	nRead := directoryDepth * s.blockSize
+	leftOver := len(hashStr) - nRead
+
+	// TODO: Fix hacky approach currently last directory may be up to 2*blockSize-1 long
+	if leftOver != 0 {
+		paths[len(paths)-1] = paths[len(paths)-1] + hashStr[nRead:nRead+leftOver]
+	}
+
+	joinedPaths := strings.Join(paths, "/")
+	pathStr := filepath.Join(s.root, joinedPaths)
+	return FileAddress{
+		PathName: pathStr,
+		HashStr:  hashStr,
+	}, nil
+
+}
+
 // Delete removes the file and any empty sub-directories given a hash
 func (s *Store) Delete(key string) error {
-	path, err := s.GetAddress(key, s.blockSize, s.root)
+	path, err := s.GetAddress(key)
 	if err != nil {
 		return err
 	}
@@ -128,7 +123,7 @@ func (s *Store) Delete(key string) error {
 
 // Has checks if the Storage object has stored a key before
 func (s *Store) Has(key string) bool {
-	address, err := s.GetAddress(key, s.blockSize, s.root)
+	address, err := s.GetAddress(key)
 	if err != nil {
 		return false
 	}
@@ -150,7 +145,7 @@ func (s *Store) Read(key string) (io.Reader, error) {
 
 // readStream reads a file from a Hash
 func (s *Store) readStream(key string) (io.ReadCloser, error) {
-	address, err := s.GetAddress(key, s.blockSize, s.root)
+	address, err := s.GetAddress(key)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +165,7 @@ func (s *Store) writeStream(r io.Reader) (string, error) {
 		return "", err
 	}
 
-	address, err := s.CreateAddress(&buf1, s.blockSize, s.root)
+	address, err := s.CreateAddress(&buf1)
 	if err != nil {
 		return "", err
 	}
@@ -199,4 +194,14 @@ func (s *Store) writeStream(r io.Reader) (string, error) {
 // Clear deletes the root and all subdirectories
 func (s *Store) Clear() error {
 	return os.RemoveAll(s.root)
+}
+
+type FileAddress struct {
+	PathName string
+	HashStr  string
+}
+
+// FullPath returns the full path to the file including the root directory
+func (f *FileAddress) FullPath() string {
+	return f.PathName + "/" + f.HashStr
 }

@@ -7,25 +7,30 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
 )
 
 // TCPPeer represents a node in the TCP network and implements the Node interface
 type TCPNode struct {
-	conn net.Conn
+	// underlying connection of node
+	net.Conn
 	// outbound if the node is making the connection to the server
 	outbound bool
+	wg       *sync.WaitGroup
 }
 
 func NewTCPNode(conn net.Conn, outbound bool) *TCPNode {
 	return &TCPNode{
-		conn:     conn,
+		Conn:     conn,
 		outbound: outbound,
+		wg:       &sync.WaitGroup{},
 	}
 }
 
-func (n *TCPNode) Close() error {
-	return n.conn.Close()
+func (n *TCPNode) Send(b []byte) error {
+	_, err := n.Conn.Write(b)
+	return err
 }
 
 type TCPTransportOpts struct {
@@ -56,6 +61,7 @@ func (t *TCPTransport) Dial(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
+	log.Printf("node: %s dialing  %s", conn.LocalAddr(), conn.RemoteAddr())
 	go t.handleConn(ctx, conn, true)
 	return nil
 }
@@ -74,39 +80,39 @@ func (t *TCPTransport) Close() error {
 	return t.listener.Close()
 }
 
+func (t *TCPTransport) ListenAddr() net.Addr {
+	return t.listener.Addr()
+
+}
 func (t *TCPTransport) ListenAndAccept(ctx context.Context) error {
 	var err error
 	t.listener, err = net.Listen("tcp", t.TCPTransportOpts.ListenAddr)
 	if err != nil {
 		return err
 	}
-	go t.startAcceptLoop(ctx)
+	go t.startAcceptLoop()
 	log.Printf("TCP Transport listening on port: %s\n", t.listener.Addr())
 	return nil
 
 }
 
-func (t *TCPTransport) startAcceptLoop(ctx context.Context) {
+func (t *TCPTransport) startAcceptLoop() {
 	for {
-		select {
-		case <-ctx.Done():
-			t.Close()
-		default:
-			conn, err := t.listener.Accept()
-			if errors.Is(err, net.ErrClosed) {
-				return
-			}
-			if err != nil {
-				fmt.Printf("tcp connection err: %s\n", err)
-				continue
-			}
-			eventResponseCtx, cancel := context.WithTimeout(ctx, time.Second*5)
-			go func() {
-				defer cancel()
-				// Accepting == inbound
-				t.handleConn(eventResponseCtx, conn, false)
-			}()
+		conn, err := t.listener.Accept()
+		if errors.Is(err, net.ErrClosed) {
+			return
 		}
+		if err != nil {
+			fmt.Printf("tcp connection err: %s\n", err)
+			continue
+		}
+		ctx := context.Background()
+		eventResponseCtx, cancel := context.WithTimeout(ctx, time.Second*5)
+		go func() {
+			defer cancel()
+			// Accepting == inbound
+			t.handleConn(eventResponseCtx, conn, false)
+		}()
 	}
 }
 
@@ -135,13 +141,12 @@ func (t *TCPTransport) handleConn(ctx context.Context, conn net.Conn, outbound b
 		conn.Close()
 		return
 	}
-
-	log.Printf("node: %s received incoming connection: %s", conn.LocalAddr(), conn.RemoteAddr())
 	rpc := RPC{}
 	for {
-		err := t.TCPTransportOpts.Decoder.Decode(peerNode.conn, &rpc)
+		err := t.TCPTransportOpts.Decoder.Decode(peerNode.Conn, &rpc)
 		if err != nil {
 			if err == io.EOF {
+				fmt.Println("eof")
 				break
 			}
 			if opErr, ok := err.(*net.OpError); ok {
@@ -152,6 +157,11 @@ func (t *TCPTransport) handleConn(ctx context.Context, conn net.Conn, outbound b
 			fmt.Printf("err reading from connection: %T\n", err)
 		}
 		rpc.From = conn.RemoteAddr()
+		peerNode.wg.Add(1)
+		fmt.Println("waiting for stream to finish")
 		t.rpcChan <- rpc
+		peerNode.wg.Wait()
+		fmt.Println("stream finished")
+
 	}
 }

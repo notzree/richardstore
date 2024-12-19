@@ -1,16 +1,21 @@
 package p2p
 
-import "context"
+import (
+	"context"
+	"net"
+)
 
 // Node represents a node in the network
 type Node interface {
-	Close() error
+	net.Conn
+	Send([]byte) error
 }
 
 type Connector interface {
 	Dial(ctx context.Context, addr string) error
 	ListenAndAccept(ctx context.Context) error
 	Close() error
+	ListenAddr() net.Addr
 }
 
 type EventEmitter interface {
