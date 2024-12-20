@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -24,6 +26,7 @@ func (s *StorageStateMachine) Apply(cmd Command) ApplyResult {
 	case CommandDelete:
 		//todo:
 	}
+	return ApplyResult{}
 }
 
 type StoreOpts struct {
@@ -31,8 +34,16 @@ type StoreOpts struct {
 	root      string
 }
 
+// concurrent safe struct to read/write bytes to a CAS file system
 type Store struct {
 	StoreOpts
+	mu    sync.RWMutex // mutex for the locks map
+	locks map[string]*lock
+}
+
+type lock struct {
+	sync.RWMutex     // per-file lock
+	refCount     int // num of active operations
 }
 
 func NewStore(opts StoreOpts) *Store {
@@ -46,10 +57,45 @@ func NewStore(opts StoreOpts) *Store {
 	}
 	return &Store{
 		StoreOpts: opts,
+		locks:     make(map[string]*lock),
 	}
 }
 
-// CASPathTransform hashes a key (filename) into its expected path.
+// gets or creates a lock for given hash (key)
+func (s *Store) getLock(key string) *lock {
+	log.Printf("getting lock for %s", key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, exists := s.locks[key]
+	if !exists {
+		l = &lock{refCount: 0}
+		s.locks[key] = l
+	}
+	l.refCount++
+	return l
+}
+
+// releaseLock decrements the reference count and removes the lock if no longer needed
+func (s *Store) releaseLock(key string) error {
+	log.Printf("releasing lock for %s", key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	l, exists := s.locks[key]
+	if !exists {
+		return fmt.Errorf("cannot relase lock that does not exist for %s", key)
+	}
+	if l.refCount <= 0 {
+		return fmt.Errorf("existing lock has LT 0 ref count")
+	}
+	l.refCount--
+	if l.refCount == 0 {
+		delete(s.locks, key)
+	}
+	return nil
+}
+
+// CreateAddress hashes a key (filename) into its expected path.
 // FileAddress may not exist on file system.
 // Always root + "/" + created_path
 func (s *Store) CreateAddress(r io.Reader) (FileAddress, error) {
@@ -62,7 +108,7 @@ func (s *Store) CreateAddress(r io.Reader) (FileAddress, error) {
 	return s.GetAddress(hashStr)
 }
 
-// CASGetAddress separates a HashStr into a FileAddress based on blocksize (max size of 1 directory name)
+// GetAddress separates a HashStr into a FileAddress based on blocksize (max size of 1 directory name)
 // and root
 func (s *Store) GetAddress(hashStr string) (FileAddress, error) {
 	directoryDepth := len(hashStr) / s.blockSize
@@ -90,6 +136,11 @@ func (s *Store) GetAddress(hashStr string) (FileAddress, error) {
 
 // Delete removes the file and any empty sub-directories given a hash
 func (s *Store) Delete(key string) error {
+	fileLock := s.getLock(key)
+	defer s.releaseLock(key)
+	fileLock.Lock()
+	defer fileLock.Unlock()
+
 	path, err := s.GetAddress(key)
 	if err != nil {
 		return err
@@ -132,7 +183,14 @@ func (s *Store) Has(key string) bool {
 
 }
 
+// Read returs and io.Reader with the underlying bytes from the given key.
 func (s *Store) Read(key string) (io.Reader, error) {
+	fileLock := s.getLock(key)
+	defer s.releaseLock(key)
+
+	fileLock.RLock()
+	defer fileLock.RUnlock()
+
 	f, err := s.readStream(key)
 	if err != nil {
 		return nil, err
@@ -153,7 +211,20 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 }
 
 func (s *Store) Write(r io.Reader) (string, error) {
-	return s.writeStream(r)
+	buff := new(bytes.Buffer)
+	tee := io.TeeReader(r, buff) // writes to buffer what it reads from R
+	addr, err := s.CreateAddress(tee)
+	if err != nil {
+		return "", err
+	}
+	log.Println(buff.Bytes())
+
+	fileLock := s.getLock(addr.HashStr)
+	defer s.releaseLock(addr.HashStr)
+	fileLock.Lock()
+	defer fileLock.Unlock()
+
+	return s.writeStream(buff)
 }
 
 // writeStream writes a file into our CAS.
