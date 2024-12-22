@@ -4,11 +4,15 @@ option go_package = "github.com/notzree/richardstore/proto";
 
 enum CommandType {
   COMMAND_TYPE_UNSPECIFIED = 0;  // Proto3 first enum value must be zero
-  COMMAND_TYPE_PUT = 1;
+  COMMAND_TYPE_WRITE = 1;
   COMMAND_TYPE_DELETE = 2;
   COMMAND_TYPE_CONFIG = 3;
 }
 
+enum TransferProtocol {
+  TRANSFER_PROTOCOL_UNSPECIFIED = 0;
+  TRANSFER_PROTOCOL_TCP = 1;
+}
 
 service Raft {
   rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
@@ -16,35 +20,51 @@ service Raft {
 }
 
 message AppendEntriesRequest {
-  int64 term = 1;
-  int64 leader_id = 2;
-  int64 prev_log_index = 3;
-  int64 prev_log_term = 4;
+  uint64 term = 1;
+  uint64 leader_id = 2;
+  uint64 prev_log_index = 3;
+  uint64 prev_log_term = 4;
   repeated LogEntry entries = 5;
-  int64 leader_commit = 6;
+  uint64 leader_commit = 6;
 }
 
 message LogEntry {
-  int64 term = 1;
-  int64 index = 2;
-  CommandType type = 3;
-  bytes data = 4;
+  uint64 term = 1;
+  uint64 index = 2;
+  Command cmd = 3;
+}
+
+// Serialized Command
+message Command {
+  CommandType type = 1;
+  bytes data = 2;
 }
 
 message AppendEntriesResponse {
-  int64 term = 1;
+  uint64 term = 1;
   bool success = 2;
 }
 
 
 message RequestVoteRequest {
-  int64 term = 1;
-  int64 candidate_id = 2;
-  int64 last_log_index = 3;
-  int64 last_log_term = 4;
+  uint64 term = 1;
+  uint64 candidate_id = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term = 4;
 }
 message RequestVoteResponse {
-  int64 term = 1;
+  uint64 term = 1;
   bool vote_granted = 2;
 }
 
+
+
+//--- Specific command ---
+
+message WriteCommand {
+  string hash = 2; // hash of the file that is expected to be received
+}
+
+message DeleteCommand {
+  string hash = 2;
+}
