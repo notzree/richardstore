@@ -32,6 +32,13 @@ message LogEntry {
   uint64 term = 1;
   uint64 index = 2;
   Command cmd = 3;
+  // Hash of Required data to perform operation
+  // DataReference required_data = 4;
+}
+
+message DataReference {
+  bytes hash = 1;
+  uint64 size = 2;
 }
 
 // Serialized Command
@@ -62,9 +69,11 @@ message RequestVoteResponse {
 //--- Specific command ---
 
 message WriteCommand {
-  string hash = 2; // hash of the file that is expected to be received
+  bytes hash = 1; // hash of the file that is expected to be received
+  uint64 size = 2;
+  
 }
 
 message DeleteCommand {
-  string hash = 2;
+  string hash = 1;
 }
