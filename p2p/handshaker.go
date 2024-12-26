@@ -1,12 +1,12 @@
 package p2p
 
-import "errors"
+// import "errors"
 
-// Returned if handshake between 2 nodes could not be established.
-var ErrInvalidHandshake = errors.New("invalid handshake")
+// // Returned if handshake between 2 nodes could not be established.
+// var ErrInvalidHandshake = errors.New("invalid handshake")
 
-type HandShakeFunc func(Node) error
+// type HandShakeFunc func(Node) error
 
-func NoopHandShakeFunc(Node) error {
-	return nil
-}
+// func NoopHandShakeFunc(Node) error {
+// 	return nil
+// }

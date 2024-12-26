@@ -1,0 +1,79 @@
+syntax = "proto3";
+package raft;
+option go_package = "github.com/notzree/richardstore/proto";
+
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;  // Proto3 first enum value must be zero
+  COMMAND_TYPE_WRITE = 1;
+  COMMAND_TYPE_DELETE = 2;
+  COMMAND_TYPE_CONFIG = 3;
+}
+
+enum TransferProtocol {
+  TRANSFER_PROTOCOL_UNSPECIFIED = 0;
+  TRANSFER_PROTOCOL_TCP = 1;
+}
+
+service Raft {
+  rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
+  rpc RequestVote (RequestVoteRequest) returns (RequestVoteResponse);
+}
+
+message AppendEntriesRequest {
+  uint64 term = 1;
+  uint64 leader_id = 2;
+  uint64 prev_log_index = 3;
+  uint64 prev_log_term = 4;
+  repeated LogEntry entries = 5;
+  uint64 leader_commit = 6;
+}
+
+message LogEntry {
+  uint64 term = 1;
+  uint64 index = 2;
+  Command cmd = 3;
+  // Hash of Required data to perform operation
+  // DataReference required_data = 4;
+}
+
+message DataReference {
+  bytes hash = 1;
+  uint64 size = 2;
+}
+
+// Serialized Command
+message Command {
+  CommandType type = 1;
+  bytes data = 2;
+}
+
+message AppendEntriesResponse {
+  uint64 term = 1;
+  bool success = 2;
+}
+
+
+message RequestVoteRequest {
+  uint64 term = 1;
+  uint64 candidate_id = 2;
+  uint64 last_log_index = 3;
+  uint64 last_log_term = 4;
+}
+message RequestVoteResponse {
+  uint64 term = 1;
+  bool vote_granted = 2;
+}
+
+
+
+//--- Specific command ---
+
+message WriteCommand {
+  bytes hash = 1; // hash of the file that is expected to be received
+  uint64 size = 2;
+  
+}
+
+message DeleteCommand {
+  string hash = 1;
+}
