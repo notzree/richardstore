@@ -11,6 +11,7 @@ import (
 
 	"github.com/notzree/richardstore/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // type Transport[T any] interface {
@@ -23,6 +24,26 @@ import (
 
 // Layer to make requests to other nodes over gRPC
 type RaftTransport struct {
+	addr       net.Addr
+	raftClient proto.RaftClient
+}
+
+func NewRaftTansport(addr net.Addr) *RaftTransport {
+	return &RaftTransport{
+		addr: addr,
+	}
+}
+func (t *RaftTransport) Dial() error {
+	conn, err := grpc.NewClient(t.addr.String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return err
+	}
+	t.raftClient = proto.NewRaftClient(conn)
+	return nil
+}
+
+func (t *RaftTransport) appendEntries(ctx context.Context, req *proto.AppendEntriesRequest) (resp *proto.AppendEntriesResponse, err error) {
+	return
 }
 
 type RaftServer struct {
@@ -51,7 +72,7 @@ func RunRaftServer(node *RaftNode, listenAddr net.Addr) error {
 // like we will just have to call RunRaftServer in the start() method of the raft node
 // legit dont even need RaftServer, its just there to make the gRPC be nice
 func (rs *RaftServer) AppendEntries(ctx context.Context, req *proto.AppendEntriesRequest) (*proto.AppendEntriesResponse, error) {
-	return rs.node.HandleAppendEntriesRequest(ctx, req)
+	return rs.node.HandleAppendEntries(ctx, req)
 }
 
 // func (rs *RaftServer) RequestVote(ctx context.Context, req *proto.RequestVoteRequest) (*proto.RequestVoteResponse, error) {

@@ -1,5 +1,11 @@
 package main
 
 type Server struct {
-	// sm StateMachine
+	Raft *RaftNode
+}
+
+func NewServer(cfg RaftNodeConfig) *Server {
+	return &Server{
+		Raft: NewRaftNode(cfg),
+	}
 }

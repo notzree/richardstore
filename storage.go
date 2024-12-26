@@ -60,12 +60,16 @@ type lock struct {
 
 var dFILE_METADATA = "_metadata"
 
-// Distributed File
+// dFileMetadata is metadata about files shared on a distributed network. Used to verify if a file has been completely read,
+// and also which nodes to query for the file.
 type dFileMetadata struct {
 	Hash   string
 	Size   uint64
 	Owners []uint64 // other nodes that hold copies of this
 }
+
+// dFile is a file on a distributed system. it might contain a reader where one can actually read the data. If not, it contains
+// dFileMetadata which contains data on what nodes to query for the file.
 type dFile struct {
 	Reader io.ReadCloser
 	dFileMetadata
