@@ -39,15 +39,32 @@ func NewFsSnapShotStore[T any](fp string) *FsSnapShotStore[T] {
 func (s *FsSnapShotStore[T]) Persist(data T) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
 	if err := enc.Encode(data); err != nil {
 		return err
 	}
+
 	tmpFile := s.filepath + ".tmp"
-	if err := os.WriteFile(tmpFile, buf.Bytes(), 0644); err != nil {
+	f, err := os.Create(tmpFile)
+	if err != nil {
 		return err
 	}
+	defer f.Close()
+
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		return err
+	}
+
+	if err := f.Sync(); err != nil {
+		return err
+	}
+
+	if err := f.Close(); err != nil {
+		return err
+	}
+
 	return os.Rename(tmpFile, s.filepath)
 }
 
