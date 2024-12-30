@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -110,7 +110,7 @@ func (s *Store) releaseLock(key string) error {
 // FileAddress may not exist on file system.
 // Always root + "/" + created_path
 func (s *Store) CreateAddress(r io.Reader) (FileAddress, error) {
-	hash := sha1.New()
+	hash := sha256.New()
 	_, err := io.Copy(hash, r)
 	if err != nil {
 		return FileAddress{}, err

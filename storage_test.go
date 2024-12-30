@@ -2,10 +2,11 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strings"
 	"sync"
@@ -23,7 +24,7 @@ func TestCreateAddressFunc(t *testing.T) {
 	s := NewStore(opts)
 	content := "momsbestpicture"
 	buf := bytes.NewBuffer([]byte(content))
-	hash := sha1.New()
+	hash := sha256.New()
 	io.Copy(hash, buf)
 	hashStr := hex.EncodeToString(hash.Sum(nil))
 	fileAddress, err := s.CreateAddress(bytes.NewReader([]byte(content)))
@@ -33,7 +34,9 @@ func TestCreateAddressFunc(t *testing.T) {
 	assert.Equal(t, fileAddress.HashStr, hashStr)
 	split := strings.Split(fileAddress.PathName, "/")
 	index := 0
-	for _, dir := range split[1:] { // skip the root directory b/c its always root + / + address
+	// skipping the last character since it might overflow depending on blocksize
+	for _, dir := range split[1 : len(split)-1] { // skip the root directory b/c its always root + / + address
+		log.Println(dir)
 		assert.Equal(t, len(dir), BLOCKSIZE)
 		expectedString := hashStr[index : index+BLOCKSIZE]
 		assert.Equal(t, expectedString, dir)
