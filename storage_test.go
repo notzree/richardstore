@@ -50,34 +50,22 @@ func TestStoreSingleAccess(t *testing.T) {
 	defer teardown(t, s)
 	data := []byte("cringe nft12222")
 	buf := bytes.NewBuffer(data)
-	buf2 := bytes.NewBuffer(data)
-	file_addr, err := s.CreateAddress(buf2)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	// test write
-	file := dFile{
-		Reader: io.NopCloser(buf),
-		dFileMetadata: dFileMetadata{
-			Hash: file_addr.HashStr,
-		},
-	}
-	hash, err := s.Write(file)
+	hash, err := s.Write(buf)
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
 	}
 	// test read
-	read_dFile, err := s.readStream(hash)
+	r, err := s.readStream(hash)
 	if err != nil {
-		t.Fatal(err)
+		t.Error(err)
 	}
 	exists := s.Has(hash)
 	if !exists {
 		t.Errorf("expected to have key %s", hash)
 	}
 
-	readData, err := io.ReadAll(read_dFile.Reader)
+	readData, err := io.ReadAll(r)
 	if err != nil {
 		t.Error(err)
 	}
@@ -107,18 +95,7 @@ func TestStoreConcurrency(t *testing.T) {
 		// First write a file
 		data := []byte("test data for concurrent reads")
 		reader := bytes.NewReader(data)
-		hashReader := bytes.NewReader(data)
-		fileAddr, err := store.CreateAddress(hashReader)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		df := NewdFile(io.NopCloser(reader), dFileMetadata{
-			Hash:   fileAddr.HashStr,
-			Size:   100, // doesnt rly matter
-			Owners: []uint64{0},
-		})
-		hash, err := store.Write(*df)
+		hash, err := store.Write(reader)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,13 +109,12 @@ func TestStoreConcurrency(t *testing.T) {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				df, err := store.Read(hash)
+				reader, err := store.Read(hash)
 				if err != nil {
 					t.Errorf("Reader %d failed: %v", id, err)
 					return
 				}
-
-				readData, err := io.ReadAll(df.Reader)
+				readData, err := io.ReadAll(reader)
 				if err != nil {
 					t.Errorf("Reader %d failed to read: %v", id, err)
 					return
@@ -164,18 +140,7 @@ func TestStoreConcurrency(t *testing.T) {
 				defer wg.Done()
 				data := []byte(fmt.Sprintf("test data %d", id))
 				reader := bytes.NewReader(data)
-				hashReader := bytes.NewReader(data)
-				fileAddr, err := store.CreateAddress(hashReader)
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				df := NewdFile(io.NopCloser(reader), dFileMetadata{
-					Hash:   fileAddr.HashStr,
-					Size:   100, // doesnt rly matter
-					Owners: []uint64{0},
-				})
-				hash, err := store.Write(*df)
+				hash, err := store.Write(reader)
 				if err != nil {
 					t.Errorf("Writer %d failed: %v", id, err)
 					return
@@ -187,12 +152,12 @@ func TestStoreConcurrency(t *testing.T) {
 				hashMutex.Unlock()
 
 				// Verify the write immediately
-				new_df, err := store.Read(hash)
+				r, err := store.Read(hash)
 				if err != nil {
 					t.Errorf("Writer %d failed to read back: %v", id, err)
 					return
 				}
-				readData, err := io.ReadAll(new_df.Reader)
+				readData, err := io.ReadAll(r)
 				if err != nil {
 					t.Errorf("Writer %d failed to read data: %v", id, err)
 					return
@@ -206,12 +171,12 @@ func TestStoreConcurrency(t *testing.T) {
 
 		// Verify all files still exist and are readable
 		for i, hash := range hashes {
-			df, err := store.Read(hash)
+			reader, err := store.Read(hash)
 			if err != nil {
 				t.Errorf("Failed to read file %d after all writes: %v", i, err)
 				continue
 			}
-			readData, err := io.ReadAll(df.Reader)
+			readData, err := io.ReadAll(reader)
 			if err != nil {
 				t.Errorf("Failed to read data from file %d after all writes: %v", i, err)
 				continue
@@ -227,18 +192,7 @@ func TestStoreConcurrency(t *testing.T) {
 		// First write an initial file that will be read concurrently
 		initialData := []byte("initial test data")
 		reader := bytes.NewReader(initialData)
-		hashReader := bytes.NewReader(initialData)
-		fileAddr, err := store.CreateAddress(hashReader)
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		df := NewdFile(io.NopCloser(reader), dFileMetadata{
-			Hash:   fileAddr.HashStr,
-			Size:   100, // doesnt rly matter
-			Owners: []uint64{0},
-		})
-		initialHash, err := store.Write(*df)
+		initialHash, err := store.Write(reader)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -252,12 +206,12 @@ func TestStoreConcurrency(t *testing.T) {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				df, err := store.Read(initialHash)
+				reader, err := store.Read(initialHash)
 				if err != nil {
 					errChan <- fmt.Errorf("Reader %d failed: %v", id, err)
 					return
 				}
-				readData, err := io.ReadAll(df.Reader)
+				readData, err := io.ReadAll(reader)
 				if err != nil {
 					errChan <- fmt.Errorf("Reader %d failed to read: %v", id, err)
 					return
@@ -275,30 +229,19 @@ func TestStoreConcurrency(t *testing.T) {
 				defer wg.Done()
 				data := []byte(fmt.Sprintf("concurrent write %d", id))
 				reader := bytes.NewReader(data)
-				hashReader := bytes.NewReader(data)
-				fileAddr, err := store.CreateAddress(hashReader)
-				if err != nil {
-					t.Fatal(err)
-				}
-
-				df := NewdFile(io.NopCloser(reader), dFileMetadata{
-					Hash:   fileAddr.HashStr,
-					Size:   100, // doesnt rly matter
-					Owners: []uint64{0},
-				})
-				hash, err := store.Write(*df)
+				hash, err := store.Write(reader)
 				if err != nil {
 					errChan <- fmt.Errorf("Writer %d failed: %v", id, err)
 					return
 				}
 
 				// Try to read it back
-				new_df, err := store.Read(hash)
+				r, err := store.Read(hash)
 				if err != nil {
 					errChan <- fmt.Errorf("Writer %d failed to read back: %v", id, err)
 					return
 				}
-				readData, err := io.ReadAll(new_df.Reader)
+				readData, err := io.ReadAll(r)
 				if err != nil {
 					errChan <- fmt.Errorf("Writer %d failed to read data: %v", id, err)
 					return
@@ -323,11 +266,11 @@ func TestStoreConcurrency(t *testing.T) {
 		}
 
 		// Verify initial file is still readable
-		df2, err := store.Read(initialHash)
+		r, err := store.Read(initialHash)
 		if err != nil {
 			t.Fatal(err)
 		}
-		readData, err := io.ReadAll(df2.Reader)
+		readData, err := io.ReadAll(r)
 		if err != nil {
 			t.Fatal(err)
 		}
