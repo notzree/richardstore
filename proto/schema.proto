@@ -2,78 +2,138 @@ syntax = "proto3";
 package raft;
 option go_package = "github.com/notzree/richardstore/proto";
 
-enum CommandType {
-  COMMAND_TYPE_UNSPECIFIED = 0;  // Proto3 first enum value must be zero
-  COMMAND_TYPE_WRITE = 1;
-  COMMAND_TYPE_DELETE = 2;
-  COMMAND_TYPE_CONFIG = 3;
+
+
+service NameNode {
+  rpc CreateFile (CreateFileRequest) returns (CreateFileResponse);
+  rpc ReadFile (ReadFileRequest) returns (ReadFileResponse);
+  rpc DeleteFile (DeleteFileRequest) returns (DeleteFileResponse);
+
+  // -- Consensus --
+  // followers -> leader (lightweight)
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+  // followers -> leader (full inventory)
+  rpc BlockReport(BlockReportRequest) returns (BlockReportResponse);
+  rpc IncrementalBlockReport(IncrementalBlockReportRequest) returns (BlockReportResponse);
+
+
+}
+message CreateFileRequest {
+  uint32 min_replication_factor = 1;
+  uint64 size = 2;
 }
 
-enum TransferProtocol {
-  TRANSFER_PROTOCOL_UNSPECIFIED = 0;
-  TRANSFER_PROTOCOL_TCP = 1;
+message CreateFileResponse {
+  repeated DataNodeInfo data_nodes = 1;
+}
+message DataNodeInfo {
+  string address = 1; // incl port
 }
 
-service Raft {
-  rpc AppendEntries (AppendEntriesRequest) returns (AppendEntriesResponse);
-  rpc RequestVote (RequestVoteRequest) returns (RequestVoteResponse);
-}
-
-message AppendEntriesRequest {
-  uint64 term = 1;
-  uint64 leader_id = 2;
-  uint64 prev_log_index = 3;
-  uint64 prev_log_term = 4;
-  repeated LogEntry entries = 5;
-  uint64 leader_commit = 6;
-}
-
-message LogEntry {
-  uint64 term = 1;
-  uint64 index = 2;
-  Command cmd = 3;
-  // Hash of Required data to perform operation
-  // DataReference required_data = 4;
-}
-
-message DataReference {
+message ReadFileRequest {
   bytes hash = 1;
+}
+
+message ReadFileResponse {
+  repeated DataNodeInfo data_nodes = 1;
   uint64 size = 2;
 }
 
-// Serialized Command
+message DeleteFileRequest {
+  bytes hash = 1;
+}
+
+message DeleteFileResponse {
+  bool success = 1;
+}
+
+
+
+
+
+
+// Follower sends to leader
+message BlockReportRequest {
+  uint64 node_id = 1;        
+
+  // File information
+  repeated FileInfo held_files = 2;
+
+  // Node status/health
+  uint64 available_space = 3;    // In bytes
+  float cpu_load = 4;            // Current CPU load
+  float disk_load = 5;           // Disk I/O load
+  uint64 timestamp = 6;          // When report was generated
+
+  // Optional optimization fields
+  uint64 last_report_id = 7;     // ID of last successful report
+}
+
+message FileInfo {
+  bytes hash = 1;             // To verify file integrity
+  uint64 size = 2;           // File size in bytes
+  float min_replication_factor = 3;
+  uint64 generation_stamp = 4;
+}
+
+// Leader responds to follower
+message BlockReportResponse {
+  uint64 node_id =1;
+  repeated Command commands = 2;
+  uint64 next_report_delay = 3;  // Suggested delay before next report
+  uint64 report_id = 4;          // ID for this report 
+}
+
+
+// follower sends to leader
+message HeartbeatRequest {
+  uint64 node_id = 1;
+  float capacity = 2;
+  float used = 3;
+}
+
+// leader responds to followers
+message HeartbeatResponse {
+  uint64 node_id = 1;
+  uint64 next_heartbeat_delay = 2;
+  repeated Command commands = 3;
+}
+
+
+message IncrementalBlockReportRequest {
+  uint64 node_id = 1;
+  repeated FileUpdate updates = 2;
+}
+
+
+// updated file
+message FileUpdate {
+  FileInfo file_info = 1;
+  Update update = 2;
+  enum Update {
+    UPDATE_UNSPECIFIED = 0;
+    UPDATE_ADD = 1;
+    UPDATE_DELETE =2;
+  }
+}
+
+
+
+
+
+
 message Command {
-  CommandType type = 1;
-  bytes data = 2;
+  oneof c {
+    ReplicateCommand rc = 1;
+    DeleteCommand dc = 2;
+  }
 }
 
-message AppendEntriesResponse {
-  uint64 term = 1;
-  bool success = 2;
+message DeleteCommand{
+  FileInfo file_info =1;
 }
-
-
-message RequestVoteRequest {
-  uint64 term = 1;
-  uint64 candidate_id = 2;
-  uint64 last_log_index = 3;
-  uint64 last_log_term = 4;
-}
-message RequestVoteResponse {
-  uint64 term = 1;
-  bool vote_granted = 2;
-}
-
-
-
-//--- Specific command ---
-
-message WriteCommand {
-  bytes hash = 1; // hash of the file that is expected to be received
-  uint64 size = 2;
-  
-}
-
-message DeleteCommand {
-  string hash = 1;
+message ReplicateCommand {
+  FileInfo file_info = 1;
+  repeated string target_nodes = 2;  // Where to replicate to
+  float current_replication_factor = 3;
 }
