@@ -31,7 +31,7 @@ message DataNodeInfo {
 }
 
 message ReadFileRequest {
-  bytes hash = 1;
+  string hash = 1;
 }
 
 message ReadFileResponse {
@@ -40,16 +40,12 @@ message ReadFileResponse {
 }
 
 message DeleteFileRequest {
-  bytes hash = 1;
+  string hash = 1;
 }
 
 message DeleteFileResponse {
   bool success = 1;
 }
-
-
-
-
 
 
 // Follower sends to leader
@@ -60,17 +56,18 @@ message BlockReportRequest {
   repeated FileInfo held_files = 2;
 
   // Node status/health
-  uint64 available_space = 3;    // In bytes
-  float cpu_load = 4;            // Current CPU load
-  float disk_load = 5;           // Disk I/O load
-  uint64 timestamp = 6;          // When report was generated
+  uint64 capacity = 3;    // In bytes
+  uint64 used = 4;
+  float cpu_load = 5;            // Current CPU load
+  float disk_load = 6;           // Disk I/O load
+  uint64 timestamp = 7;          // When report was generated
 
   // Optional optimization fields
-  uint64 last_report_id = 7;     // ID of last successful report
+  uint64 last_report_id = 8;     // ID of last successful report
 }
 
 message FileInfo {
-  bytes hash = 1;             // To verify file integrity
+  string hash = 1;             // To verify file integrity
   uint64 size = 2;           // File size in bytes
   float min_replication_factor = 3;
   uint64 generation_stamp = 4;
@@ -88,8 +85,9 @@ message BlockReportResponse {
 // follower sends to leader
 message HeartbeatRequest {
   uint64 node_id = 1;
-  float capacity = 2;
-  float used = 3;
+  // in bytes
+  uint64 capacity = 2;
+  uint64 used = 3;
 }
 
 // leader responds to followers
