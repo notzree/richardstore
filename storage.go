@@ -13,32 +13,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-
-	"github.com/notzree/richardstore/proto"
 )
-
-type StorageStateMachine struct {
-	Storer Store
-}
-
-func (s *StorageStateMachine) Apply(cmd *proto.Command) (*ApplyResult, error) {
-	switch cmd.Type {
-	case proto.CommandType_COMMAND_TYPE_UNSPECIFIED:
-		// will return empty ApplyResult
-	case proto.CommandType_COMMAND_TYPE_WRITE:
-		var spec_cmd proto.WriteCommand
-		if err := DeserializeCommand(cmd, &spec_cmd); err != nil {
-			return nil, err
-		}
-		return &ApplyResult{}, nil
-
-	case proto.CommandType_COMMAND_TYPE_DELETE:
-		// todo
-	case proto.CommandType_COMMAND_TYPE_CONFIG:
-		// unimplemented
-	}
-	return &ApplyResult{}, nil
-}
 
 type StoreOpts struct {
 	blockSize int
