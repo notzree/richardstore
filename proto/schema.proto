@@ -121,9 +121,9 @@ message FileUpdate {
 
 
 message Command {
-  oneof c {
-    ReplicateCommand rc = 1;
-    DeleteCommand dc = 2;
+  oneof command {
+    ReplicateCommand replicate = 1;
+    DeleteCommand delete = 2;
   }
 }
 
