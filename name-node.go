@@ -47,9 +47,9 @@ type PeerDataNode struct {
 type NameNode struct {
 	Id        uint64
 	address   string
-	fmpMu     *sync.Mutex
+	fmpMu     *sync.RWMutex
 	Fmp       FileMap
-	dnMu      *sync.Mutex
+	dnMu      *sync.RWMutex
 	DataNodes map[uint64]*PeerDataNode
 	cmdMu     *sync.Mutex
 	Commands  map[uint64][]*proto.Command
@@ -72,15 +72,18 @@ func NewNameNode(Id uint64, address string, storer *Store, dataNodesSlice []Peer
 	}
 
 	return &NameNode{
-		Id:        Id,
-		address:   address,
-		Storer:    storer,
-		fmpMu:     &sync.Mutex{},
-		Fmp:       make(FileMap),
-		dnMu:      &sync.Mutex{},
+		Id:      Id,
+		address: address,
+		Storer:  storer,
+
+		fmpMu: &sync.RWMutex{},
+		Fmp:   make(FileMap),
+
+		dnMu:      &sync.RWMutex{},
 		DataNodes: dataNodeMap,
-		cmdMu:     &sync.Mutex{},
-		Commands:  make(map[uint64][]*proto.Command),
+
+		cmdMu:    &sync.Mutex{},
+		Commands: make(map[uint64][]*proto.Command),
 
 		HeartbeatInterval: hbInterval,
 		MaxSimCommand:     mxCmd,
@@ -100,15 +103,82 @@ func (node *NameNode) StartRPCServer() error {
 }
 
 func (node *NameNode) CreateFile(ctx context.Context, req *proto.CreateFileRequest) (resp *proto.CreateFileResponse, err error) {
+	node.dnMu.RLock()
+	defer node.dnMu.RUnlock()
+	nodes := make([]*proto.DataNodeInfo, 0)
 
+	numRequiredNodes := int(int(req.MinReplicationFactor) * len(node.DataNodes))
+	// in the future I would make this a heap thing
+	for _, dataNode := range node.DataNodes {
+		if !dataNode.Alive || (dataNode.Capacity-dataNode.Used) < req.Size {
+			continue
+		}
+		nodes = append(nodes, &proto.DataNodeInfo{Address: dataNode.RPCAddress})
+		if len(nodes) >= numRequiredNodes {
+			break
+		}
+	}
+	if len(nodes) < numRequiredNodes {
+		return nil, fmt.Errorf("insufficient available datanodes for replication factor %d: need %d, found %d",
+			req.MinReplicationFactor, numRequiredNodes, len(nodes))
+	}
+	return &proto.CreateFileResponse{
+		DataNodes: nodes,
+	}, nil
 }
 
 func (node *NameNode) ReadFile(ctx context.Context, req *proto.ReadFileRequest) (resp *proto.ReadFileResponse, err error) {
+	node.fmpMu.RLock()
+	defer node.fmpMu.RUnlock()
+	node.dnMu.RLock()
+	defer node.dnMu.RUnlock()
+	availableNodes := make([]*proto.DataNodeInfo, 0)
+	fileEntry, exist := node.Fmp[req.Hash]
+	if !exist {
+		// do we return empty or throw error!?
+		return &proto.ReadFileResponse{DataNodes: availableNodes, Size: 0}, nil
+	}
+	for id, _ := range fileEntry.Replicas {
+		dn, exist := node.DataNodes[id]
+		if !exist {
+			return nil, fmt.Errorf("data node id not recognized: %d", id)
+		}
+		availableNodes = append(availableNodes, &proto.DataNodeInfo{
+			Address: dn.RPCAddress,
+		})
+
+	}
+	return &proto.ReadFileResponse{
+		Size:      fileEntry.Size,
+		DataNodes: availableNodes,
+	}, nil
 
 }
 
 func (node *NameNode) DeleteFile(ctx context.Context, req *proto.DeleteFileRequest) (resp *proto.DeleteFileResponse, err error) {
-
+	node.fmpMu.RLock()
+	defer node.fmpMu.RUnlock()
+	node.dnMu.Lock()
+	defer node.dnMu.Unlock()
+	fileEntry, exist := node.Fmp[req.Hash]
+	if !exist {
+		return &proto.DeleteFileResponse{Success: false}, nil
+	}
+	node.cmdMu.Lock()
+	defer node.cmdMu.Unlock()
+	for id, _ := range fileEntry.Replicas {
+		if _, exist := node.Commands[id]; !exist {
+			return nil, fmt.Errorf("data node id not recognized: %d", id)
+		}
+		node.Commands[id] = append(node.Commands[id], &proto.Command{
+			Command: &proto.Command_Delete{
+				Delete: &proto.DeleteCommand{
+					FileInfo: fileEntry.FileInfo,
+				},
+			},
+		})
+	}
+	return &proto.DeleteFileResponse{Success: true}, nil
 }
 
 // Consensus things
