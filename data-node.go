@@ -3,22 +3,52 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/notzree/richardstore/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
+// peer nodes view of the data node
 type PeerDataNode struct {
-	Id         uint64
-	RPCAddress string
-	Alive      bool
-	LastSeen   time.Time
+	Id       uint64
+	Address  string
+	Alive    bool
+	LastSeen time.Time
 	// in bytes
 	Capacity uint64
 	Used     uint64
+}
+type DataNodeClient struct {
+	conn   *grpc.ClientConn
+	client proto.DataNodeClient
+}
+
+func NewDataNodeClient(address string) (*DataNodeClient, error) {
+	conn, err := grpc.NewClient(
+		address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DataNodeClient{
+		conn:   conn,
+		client: proto.NewDataNodeClient(conn),
+	}, nil
+}
+
+func (dc *DataNodeClient) Close() error {
+	if dc.conn != nil {
+		return dc.conn.Close()
+	}
+	return nil
 }
 
 type DataNode struct {
@@ -29,12 +59,21 @@ type DataNode struct {
 	Used     uint64
 	Storer   *Store
 
+	dnMu      *sync.RWMutex
+	DataNodes map[uint64]*PeerDataNode
+
+	clientsMu *sync.RWMutex
+	Clients   map[uint64]*DataNodeClient
+
+	NameNode PeerNameNode
+	cmdChan  chan *proto.Command // or whatever type you want to send
+
 	HeartbeatInterval   time.Duration
 	BlockReportInterval time.Duration
 	proto.UnimplementedDataNodeServer
 }
 
-func NewDataNode(Id uint64, address string, storer *Store, capacity ...uint64) *DataNode {
+func NewDataNode(Id uint64, address string, storer *Store, maxSimCommands int, capacity ...uint64) *DataNode {
 	var nodeCapacity uint64
 
 	if len(capacity) > 0 {
@@ -44,11 +83,16 @@ func NewDataNode(Id uint64, address string, storer *Store, capacity ...uint64) *
 	}
 
 	return &DataNode{
-		Id:       Id,
-		address:  address,
-		Storer:   storer,
-		Capacity: nodeCapacity,
-		Used:     0,
+		Id:        Id,
+		address:   address,
+		Storer:    storer,
+		Capacity:  nodeCapacity,
+		Used:      0,
+		dnMu:      &sync.RWMutex{},
+		DataNodes: make(map[uint64]*PeerDataNode),
+		clientsMu: &sync.RWMutex{},
+		Clients:   make(map[uint64]*DataNodeClient),
+		cmdChan:   make(chan *proto.Command, maxSimCommands),
 	}
 }
 
@@ -64,28 +108,202 @@ func (node *DataNode) StartRPCServer() error {
 	return server.Serve(ln)
 }
 
-func (node *DataNode) HandleDeleteCommand(ctx context.Context, cmd *proto.DeleteCommand) (*proto.CommandResponse, error) {
-	// TODO: Delete file from Storer
-
+// handle replication stream (datanode -> peer datanode)
+func (node *DataNode) ReplicateFile(stream grpc.ClientStreamingServer[proto.ReplicateFileRequest, proto.CommandResponse]) error {
+	return nil
 }
 
-func (node *DataNode) ReplicateFile(stream proto.DataNode_ReplicateFileServer) (*proto.CommandResponse, error) {
-	// TODO: Handle replication stream similar to WriteFile
-	// But likely also need to handle forwarding to next DataNode in pipeline
+func (node *DataNode) WriteFile(stream grpc.ClientStreamingServer[proto.WriteFileRequest, proto.WriteFileResponse]) error {
+	return nil
 }
 
-func (node *DataNode) WriteFile(stream proto.DataNode_WriteFileServer) (*proto.WriteFileResponse, error) {
-	// TODO: Receive file info and chunkss
-	// Write to Storer
+func (node *DataNode) ReadFile(req *proto.ReadFileRequest, stream grpc.ServerStreamingServer[proto.ReadFileResponse]) error {
+	return nil
 }
 
-func (node *DataNode)ReadFile(*proto.ReadFileRequest, grpc.ServerStreamingServer[*proto.ReadFileResponse]) error{}
-	// TODO: Read file from Storer
-	// Stream chunks back to client
-}
+// TODO: Read file from Storer
+// Stream chunks back to client
 
 // Optional helper function for handling streaming writes
-func (dn *DataNode) handleFileStream(stream proto.DataNode_WriteFileServer) (*proto.FileInfo, error) {
-	// Common streaming logic that could be used by both WriteFile and ReplicateFile
-	return nil, fmt.Errorf("not implemented")
+// func (node *DataNode) handleFileStream(stream proto.DataNode_WriteFileServer) (*proto.FileInfo, error) {
+// 	// Common streaming logic that could be used by both WriteFile and ReplicateFile
+// 	return nil, fmt.Errorf("not implemented")
+// }
+
+// SendHeartbeat will send a heartbeat to the server,
+// and enque any commands to the data node once it gets a response.
+
+func (node *DataNode) SendHeartbeat() error {
+	c := node.NameNode.client
+	ctx := context.Background()
+	response, err := c.client.Heartbeat(ctx, &proto.HeartbeatRequest{
+		NodeId:   node.Id,
+		Capacity: node.Capacity,
+		Used:     node.Used,
+	})
+	if err != nil {
+		return err
+	}
+	for _, cmd := range response.Commands {
+		node.cmdChan <- cmd
+	}
+
+	node.HeartbeatInterval = time.Duration(response.NextHeartbeatDelay)
+	return nil
+}
+
+// Handle + process any commands
+func (node *DataNode) HandleCommands() error {
+	for {
+		select {
+		case cmd := <-node.cmdChan:
+			switch c := cmd.Command.(type) {
+			case *proto.Command_Replicate:
+				err := node.handleReplication(c.Replicate)
+				if err != nil {
+					log.Printf("Error handling replication: %v", err)
+				}
+
+			case *proto.Command_Delete:
+				err := node.handleDelete(c.Delete)
+				if err != nil {
+					log.Printf("Error handling delete: %v", err)
+				}
+			default:
+				log.Printf("Unknown command type: %T", c)
+			}
+		}
+	}
+}
+
+func (node *DataNode) handleDelete(cmd *proto.DeleteCommand) error {
+	err := node.Storer.Delete(cmd.FileInfo.Hash)
+	if err != nil {
+		return err
+	}
+	// might want to grab the file size again from the file system rather than trusting cmd
+	node.Used += cmd.FileInfo.Size
+	return nil
+}
+
+func (node *DataNode) handleReplication(cmd *proto.ReplicateCommand) error {
+	if !node.Storer.Has(cmd.FileInfo.Hash) {
+		return fmt.Errorf("node %d missing file hash %s", node.Id, cmd.FileInfo.Hash)
+	}
+
+	// Get the file reader
+	fr, err := node.Storer.Read(cmd.FileInfo.Hash)
+	if err != nil {
+		return err
+	}
+	defer fr.Close()
+	if len(cmd.TargetNodes) == 0 {
+		log.Printf("end of replication chain reached with node %d", node.Id)
+		return nil
+	}
+	target := cmd.TargetNodes[0]
+	remaining := cmd.TargetNodes[1:]
+
+	node.clientsMu.Lock()
+	defer node.clientsMu.Unlock()
+
+	ctx := context.Background()
+	stream, err := node.Clients[target].client.ReplicateFile(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create stream: %w", err)
+	}
+
+	// First send the command
+	err = stream.Send(&proto.ReplicateFileRequest{
+		Request: &proto.ReplicateFileRequest_Command{
+			Command: &proto.ReplicateCommand{
+				FileInfo:                 cmd.FileInfo,
+				TargetNodes:              remaining, // Pass remaining nodes
+				CurrentReplicationFactor: cmd.CurrentReplicationFactor,
+			},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to send command: %w", err)
+	}
+
+	// Then stream the file chunks
+	buf := make([]byte, 32*1024) // 32KB chunks
+	for {
+		n, err := fr.Read(buf)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("error reading file: %w", err)
+		}
+
+		err = stream.Send(&proto.ReplicateFileRequest{
+			Request: &proto.ReplicateFileRequest_Chunk{
+				Chunk: buf[:n],
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to send chunk: %w", err)
+		}
+	}
+
+	// Close the stream and get response
+	response, err := stream.CloseAndRecv()
+	if err != nil {
+		return fmt.Errorf("error closing stream: %w", err)
+	}
+	if !response.Success {
+		return fmt.Errorf("failed to replicate file: %s to node: %d", cmd.FileInfo.Hash, target)
+	}
+
+	log.Printf("File replication completed for %s", cmd.FileInfo.Hash)
+	return nil
+}
+
+func (node *DataNode) CloseAllClients() {
+	node.clientsMu.Lock()
+	defer node.clientsMu.Unlock()
+
+	for _, client := range node.Clients {
+		client.Close()
+	}
+	node.Clients = make(map[uint64]*DataNodeClient)
+}
+
+func (node *DataNode) PeerRepresentation() *PeerDataNode {
+	return &PeerDataNode{
+		Id:       node.Id,
+		Address:  node.address,
+		Alive:    true,
+		LastSeen: time.Now(),
+		// in bytes
+		Capacity: node.Capacity,
+		Used:     node.Used,
+	}
+}
+
+func (node *DataNode) AddDataNodes(dataNodesSlice []PeerDataNode) {
+	node.dnMu.Lock()
+	defer node.dnMu.Unlock()
+
+	for _, dn := range dataNodesSlice {
+		dnCopy := dn
+		node.DataNodes[dn.Id] = &dnCopy
+	}
+}
+
+func (node *DataNode) InitializeClients() error {
+	node.clientsMu.Lock()
+	for id, peer := range node.DataNodes {
+		c, err := NewDataNodeClient(peer.Address)
+		if err != nil {
+			return err
+		}
+		// log.Printf("%d connected to node %d\n", node.Id, peer.Id)
+		node.Clients[id] = c
+	}
+	log.Printf("%d connected to %d other peer nodes", node.Id, len(node.DataNodes))
+	return nil
+
 }
