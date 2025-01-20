@@ -34,15 +34,6 @@ const (
 )
 
 // Name-nodes view of the data node
-type PeerDataNode struct {
-	Id         uint64
-	RPCAddress string
-	Alive      bool
-	LastSeen   time.Time
-	// in bytes
-	Capacity uint64
-	Used     uint64
-}
 
 type NameNode struct {
 	Id        uint64
@@ -58,12 +49,10 @@ type NameNode struct {
 	HeartbeatInterval   time.Duration
 	BlockReportInterval time.Duration
 
-	Storer *Store
-
 	proto.UnimplementedNameNodeServer
 }
 
-func NewNameNode(Id uint64, address string, storer *Store, dataNodesSlice []PeerDataNode, hbInterval time.Duration, mxCmd int) *NameNode {
+func NewNameNode(Id uint64, address string, dataNodesSlice []PeerDataNode, hbInterval time.Duration, mxCmd int) *NameNode {
 
 	dataNodeMap := make(map[uint64]*PeerDataNode)
 	for _, dn := range dataNodesSlice {
@@ -74,7 +63,6 @@ func NewNameNode(Id uint64, address string, storer *Store, dataNodesSlice []Peer
 	return &NameNode{
 		Id:      Id,
 		address: address,
-		Storer:  storer,
 
 		fmpMu: &sync.RWMutex{},
 		Fmp:   make(FileMap),
