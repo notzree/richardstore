@@ -19,6 +19,212 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	DataNode_HandleDeleteCommand_FullMethodName = "/raft.DataNode/HandleDeleteCommand"
+	DataNode_ReplicateFile_FullMethodName       = "/raft.DataNode/ReplicateFile"
+	DataNode_WriteFile_FullMethodName           = "/raft.DataNode/WriteFile"
+	DataNode_ReadFile_FullMethodName            = "/raft.DataNode/ReadFile"
+)
+
+// DataNodeClient is the client API for DataNode service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type DataNodeClient interface {
+	HandleDeleteCommand(ctx context.Context, in *DeleteCommand, opts ...grpc.CallOption) (*CommandResponse, error)
+	ReplicateFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ReplicateFileRequest, CommandResponse], error)
+	WriteFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse], error)
+	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileResponse], error)
+}
+
+type dataNodeClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewDataNodeClient(cc grpc.ClientConnInterface) DataNodeClient {
+	return &dataNodeClient{cc}
+}
+
+func (c *dataNodeClient) HandleDeleteCommand(ctx context.Context, in *DeleteCommand, opts ...grpc.CallOption) (*CommandResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CommandResponse)
+	err := c.cc.Invoke(ctx, DataNode_HandleDeleteCommand_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataNodeClient) ReplicateFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ReplicateFileRequest, CommandResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DataNode_ServiceDesc.Streams[0], DataNode_ReplicateFile_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ReplicateFileRequest, CommandResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_ReplicateFileClient = grpc.ClientStreamingClient[ReplicateFileRequest, CommandResponse]
+
+func (c *dataNodeClient) WriteFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DataNode_ServiceDesc.Streams[1], DataNode_WriteFile_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WriteFileRequest, WriteFileResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_WriteFileClient = grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse]
+
+func (c *dataNodeClient) ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DataNode_ServiceDesc.Streams[2], DataNode_ReadFile_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ReadFileRequest, ReadFileResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_ReadFileClient = grpc.ServerStreamingClient[ReadFileResponse]
+
+// DataNodeServer is the server API for DataNode service.
+// All implementations must embed UnimplementedDataNodeServer
+// for forward compatibility.
+type DataNodeServer interface {
+	HandleDeleteCommand(context.Context, *DeleteCommand) (*CommandResponse, error)
+	ReplicateFile(grpc.ClientStreamingServer[ReplicateFileRequest, CommandResponse]) error
+	WriteFile(grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]) error
+	ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileResponse]) error
+	mustEmbedUnimplementedDataNodeServer()
+}
+
+// UnimplementedDataNodeServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedDataNodeServer struct{}
+
+func (UnimplementedDataNodeServer) HandleDeleteCommand(context.Context, *DeleteCommand) (*CommandResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HandleDeleteCommand not implemented")
+}
+func (UnimplementedDataNodeServer) ReplicateFile(grpc.ClientStreamingServer[ReplicateFileRequest, CommandResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ReplicateFile not implemented")
+}
+func (UnimplementedDataNodeServer) WriteFile(grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method WriteFile not implemented")
+}
+func (UnimplementedDataNodeServer) ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ReadFile not implemented")
+}
+func (UnimplementedDataNodeServer) mustEmbedUnimplementedDataNodeServer() {}
+func (UnimplementedDataNodeServer) testEmbeddedByValue()                  {}
+
+// UnsafeDataNodeServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to DataNodeServer will
+// result in compilation errors.
+type UnsafeDataNodeServer interface {
+	mustEmbedUnimplementedDataNodeServer()
+}
+
+func RegisterDataNodeServer(s grpc.ServiceRegistrar, srv DataNodeServer) {
+	// If the following call pancis, it indicates UnimplementedDataNodeServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&DataNode_ServiceDesc, srv)
+}
+
+func _DataNode_HandleDeleteCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteCommand)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataNodeServer).HandleDeleteCommand(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataNode_HandleDeleteCommand_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataNodeServer).HandleDeleteCommand(ctx, req.(*DeleteCommand))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataNode_ReplicateFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(DataNodeServer).ReplicateFile(&grpc.GenericServerStream[ReplicateFileRequest, CommandResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_ReplicateFileServer = grpc.ClientStreamingServer[ReplicateFileRequest, CommandResponse]
+
+func _DataNode_WriteFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(DataNodeServer).WriteFile(&grpc.GenericServerStream[WriteFileRequest, WriteFileResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_WriteFileServer = grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]
+
+func _DataNode_ReadFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ReadFileRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DataNodeServer).ReadFile(m, &grpc.GenericServerStream[ReadFileRequest, ReadFileResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_ReadFileServer = grpc.ServerStreamingServer[ReadFileResponse]
+
+// DataNode_ServiceDesc is the grpc.ServiceDesc for DataNode service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var DataNode_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "raft.DataNode",
+	HandlerType: (*DataNodeServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "HandleDeleteCommand",
+			Handler:    _DataNode_HandleDeleteCommand_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ReplicateFile",
+			Handler:       _DataNode_ReplicateFile_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "WriteFile",
+			Handler:       _DataNode_WriteFile_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "ReadFile",
+			Handler:       _DataNode_ReadFile_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "proto/schema.proto",
+}
+
+const (
 	NameNode_CreateFile_FullMethodName             = "/raft.NameNode/CreateFile"
 	NameNode_ReadFile_FullMethodName               = "/raft.NameNode/ReadFile"
 	NameNode_DeleteFile_FullMethodName             = "/raft.NameNode/DeleteFile"

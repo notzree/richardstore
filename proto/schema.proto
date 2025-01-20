@@ -2,6 +2,35 @@ syntax = "proto3";
 package raft;
 option go_package = "github.com/notzree/richardstore/proto";
 
+service DataNode{
+  rpc HandleDeleteCommand(DeleteCommand) returns (CommandResponse);
+  rpc ReplicateFile(stream ReplicateFileRequest) returns (CommandResponse);
+  rpc WriteFile(stream WriteFileRequest) returns (WriteFileResponse);
+  rpc ReadFile(ReadFileRequest) returns (stream ReadFileResponse);
+}
+
+message ReplicateFileRequest {
+  oneof request {
+    ReplicateCommand command = 1;
+    bytes chunk = 2;
+  }
+}
+
+
+message WriteFileRequest {
+  oneof request {
+    FileInfo file_info = 1;
+    bytes chunk = 2;
+  }
+}
+
+message WriteFileResponse {
+  bool success = 1;
+}
+
+message CommandResponse {
+  bool success = 1;
+}
 
 
 service NameNode {
@@ -15,7 +44,6 @@ service NameNode {
   // followers -> leader (full inventory)
   rpc BlockReport(BlockReportRequest) returns (BlockReportResponse);
   rpc IncrementalBlockReport(IncrementalBlockReportRequest) returns (BlockReportResponse);
-
 
 }
 message CreateFileRequest {
@@ -130,8 +158,14 @@ message Command {
 message DeleteCommand{
   FileInfo file_info =1;
 }
+
 message ReplicateCommand {
   FileInfo file_info = 1;
   repeated string target_nodes = 2;  // Where to replicate to
   float current_replication_factor = 3;
 }
+
+// Subsequent datanodes will initiate a replication chain
+// starting from target_nodes[1].
+//client -> target_nodes[0] -> target_nodes[1], etc
+// Do this by removing the first lmt.
