@@ -10,6 +10,7 @@ import (
 
 	"github.com/notzree/richardstore/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 type FileEntry struct {
@@ -33,7 +34,39 @@ const (
 	Data
 )
 
-// Name-nodes view of the data node
+// Peer node view of NameNode
+type PeerNameNode struct {
+	Id      uint64
+	address string
+	client  NameNodeClient
+}
+
+type NameNodeClient struct {
+	conn   *grpc.ClientConn
+	client proto.NameNodeClient
+}
+
+func NewNameNodeClient(address string) (*NameNodeClient, error) {
+	conn, err := grpc.NewClient(
+		address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &NameNodeClient{
+		conn:   conn,
+		client: proto.NewNameNodeClient(conn),
+	}, nil
+}
+
+func (nc *NameNodeClient) Close() error {
+	if nc.conn != nil {
+		return nc.conn.Close()
+	}
+	return nil
+}
 
 type NameNode struct {
 	Id        uint64
@@ -78,6 +111,28 @@ func NewNameNode(Id uint64, address string, dataNodesSlice []PeerDataNode, hbInt
 	}
 }
 
+func (node *NameNode) PeerRepresentation() *PeerNameNode {
+	c, err := NewNameNodeClient(node.address)
+	if err != nil {
+		panic("failed to initiate name node connection")
+	}
+	return &PeerNameNode{
+		Id:      node.Id,
+		address: node.address,
+		client:  *c,
+	}
+}
+
+func (node *NameNode) AddDataNodes(dataNodesSlice []PeerDataNode) {
+	node.dnMu.Lock()
+	defer node.dnMu.Unlock()
+
+	for _, dn := range dataNodesSlice {
+		dnCopy := dn
+		node.DataNodes[dn.Id] = &dnCopy
+	}
+}
+
 func (node *NameNode) StartRPCServer() error {
 	ln, err := net.Listen("tcp", node.address)
 	if err != nil {
@@ -101,7 +156,7 @@ func (node *NameNode) CreateFile(ctx context.Context, req *proto.CreateFileReque
 		if !dataNode.Alive || (dataNode.Capacity-dataNode.Used) < req.Size {
 			continue
 		}
-		nodes = append(nodes, &proto.DataNodeInfo{Address: dataNode.RPCAddress})
+		nodes = append(nodes, &proto.DataNodeInfo{Address: dataNode.Address})
 		if len(nodes) >= numRequiredNodes {
 			break
 		}
@@ -132,7 +187,7 @@ func (node *NameNode) ReadFile(ctx context.Context, req *proto.ReadFileRequest) 
 			return nil, fmt.Errorf("data node id not recognized: %d", id)
 		}
 		availableNodes = append(availableNodes, &proto.DataNodeInfo{
-			Address: dn.RPCAddress,
+			Address: dn.Address,
 		})
 
 	}
