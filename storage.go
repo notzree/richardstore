@@ -171,7 +171,7 @@ func (s *Store) Has(key string) bool {
 }
 
 // Read returs and io.Reader with the underlying bytes from the given key.
-func (s *Store) Read(key string) (io.Reader, error) {
+func (s *Store) Read(key string) (io.ReadCloser, error) {
 	fileLock := s.getLock(key)
 	defer s.releaseLock(key)
 
@@ -182,10 +182,7 @@ func (s *Store) Read(key string) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	buf := new(bytes.Buffer)
-	_, err = io.Copy(buf, f)
-	return buf, err
+	return f, nil
 }
 
 // readStream reads a file from a Hash
