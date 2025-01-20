@@ -19,17 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DataNode_HandleDeleteCommand_FullMethodName = "/raft.DataNode/HandleDeleteCommand"
-	DataNode_ReplicateFile_FullMethodName       = "/raft.DataNode/ReplicateFile"
-	DataNode_WriteFile_FullMethodName           = "/raft.DataNode/WriteFile"
-	DataNode_ReadFile_FullMethodName            = "/raft.DataNode/ReadFile"
+	DataNode_ReplicateFile_FullMethodName = "/raft.DataNode/ReplicateFile"
+	DataNode_WriteFile_FullMethodName     = "/raft.DataNode/WriteFile"
+	DataNode_ReadFile_FullMethodName      = "/raft.DataNode/ReadFile"
 )
 
 // DataNodeClient is the client API for DataNode service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type DataNodeClient interface {
-	HandleDeleteCommand(ctx context.Context, in *DeleteCommand, opts ...grpc.CallOption) (*CommandResponse, error)
 	ReplicateFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ReplicateFileRequest, CommandResponse], error)
 	WriteFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse], error)
 	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileResponse], error)
@@ -41,16 +39,6 @@ type dataNodeClient struct {
 
 func NewDataNodeClient(cc grpc.ClientConnInterface) DataNodeClient {
 	return &dataNodeClient{cc}
-}
-
-func (c *dataNodeClient) HandleDeleteCommand(ctx context.Context, in *DeleteCommand, opts ...grpc.CallOption) (*CommandResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(CommandResponse)
-	err := c.cc.Invoke(ctx, DataNode_HandleDeleteCommand_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *dataNodeClient) ReplicateFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ReplicateFileRequest, CommandResponse], error) {
@@ -102,7 +90,6 @@ type DataNode_ReadFileClient = grpc.ServerStreamingClient[ReadFileResponse]
 // All implementations must embed UnimplementedDataNodeServer
 // for forward compatibility.
 type DataNodeServer interface {
-	HandleDeleteCommand(context.Context, *DeleteCommand) (*CommandResponse, error)
 	ReplicateFile(grpc.ClientStreamingServer[ReplicateFileRequest, CommandResponse]) error
 	WriteFile(grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]) error
 	ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileResponse]) error
@@ -116,9 +103,6 @@ type DataNodeServer interface {
 // pointer dereference when methods are called.
 type UnimplementedDataNodeServer struct{}
 
-func (UnimplementedDataNodeServer) HandleDeleteCommand(context.Context, *DeleteCommand) (*CommandResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method HandleDeleteCommand not implemented")
-}
 func (UnimplementedDataNodeServer) ReplicateFile(grpc.ClientStreamingServer[ReplicateFileRequest, CommandResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method ReplicateFile not implemented")
 }
@@ -147,24 +131,6 @@ func RegisterDataNodeServer(s grpc.ServiceRegistrar, srv DataNodeServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&DataNode_ServiceDesc, srv)
-}
-
-func _DataNode_HandleDeleteCommand_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteCommand)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(DataNodeServer).HandleDeleteCommand(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DataNode_HandleDeleteCommand_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DataNodeServer).HandleDeleteCommand(ctx, req.(*DeleteCommand))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _DataNode_ReplicateFile_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -198,12 +164,7 @@ type DataNode_ReadFileServer = grpc.ServerStreamingServer[ReadFileResponse]
 var DataNode_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "raft.DataNode",
 	HandlerType: (*DataNodeServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "HandleDeleteCommand",
-			Handler:    _DataNode_HandleDeleteCommand_Handler,
-		},
-	},
+	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "ReplicateFile",

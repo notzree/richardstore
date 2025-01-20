@@ -3,7 +3,6 @@ package raft;
 option go_package = "github.com/notzree/richardstore/proto";
 
 service DataNode{
-  rpc HandleDeleteCommand(DeleteCommand) returns (CommandResponse);
   rpc ReplicateFile(stream ReplicateFileRequest) returns (CommandResponse);
   rpc WriteFile(stream WriteFileRequest) returns (WriteFileResponse);
   rpc ReadFile(ReadFileRequest) returns (stream ReadFileResponse);
@@ -143,11 +142,6 @@ message FileUpdate {
   }
 }
 
-
-
-
-
-
 message Command {
   oneof command {
     ReplicateCommand replicate = 1;
@@ -161,7 +155,7 @@ message DeleteCommand{
 
 message ReplicateCommand {
   FileInfo file_info = 1;
-  repeated string target_nodes = 2;  // Where to replicate to
+  repeated uint64 target_nodes = 2;  // Where to replicate to
   float current_replication_factor = 3;
 }
 
