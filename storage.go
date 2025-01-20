@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 type StoreOpts struct {
@@ -260,4 +262,14 @@ type FileAddress struct {
 // FullPath returns the full path to the file including the root directory
 func (f *FileAddress) FullPath() string {
 	return f.PathName + "/" + f.HashStr
+}
+
+func (s *Store) GetAvailableCapacity() uint64 {
+	var stat unix.Statfs_t
+	err := unix.Statfs(s.root, &stat)
+	if err != nil {
+		log.Printf("Warning: Could not get disk stats: %v", err)
+		return 1 << 40 // 1TB default for now?
+	}
+	return stat.Bavail * uint64(stat.Bsize)
 }
