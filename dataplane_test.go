@@ -40,7 +40,7 @@ func TestDataSender(t *testing.T) {
 			wantErr:  false,
 		},
 	}
-	dp := NewDataPlane(PORT)
+	dp := NewDataPlane(PORT, NewStore(StoreOpts{5, PORT}))
 	go dp.Listen()
 	defer dp.Teardown()
 	time.Sleep(500 * time.Millisecond)

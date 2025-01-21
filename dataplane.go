@@ -11,29 +11,27 @@ import (
 	"time"
 )
 
-type DataPlane struct {
+type DataListener struct {
 	http.Server
-	DataSender
-	Store
+	*Store
 	port string
 }
 
-func NewDataPlane(port string) *DataPlane {
-	return &DataPlane{
-		port:       port,
-		DataSender: *NewDataSender(),
-		Store:      *NewStore(StoreOpts{blockSize: 5, root: port}),
+func NewDataPlane(port string, store *Store) *DataListener {
+	return &DataListener{
+		port:  port,
+		Store: store,
 	}
 }
 
-func (dp *DataPlane) Listen() {
+func (dp *DataListener) Listen() {
 	http.HandleFunc("/p2p/transfer", dp.AcceptTransfer)
 	fmt.Printf("Server starting on port %s\n", dp.port)
 	if err := http.ListenAndServe(dp.port, nil); err != nil {
 		log.Fatal(err)
 	}
 }
-func (dp *DataPlane) AcceptTransfer(w http.ResponseWriter, r *http.Request) {
+func (dp *DataListener) AcceptTransfer(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost && r.Method != http.MethodPut {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -63,7 +61,7 @@ func (dp *DataPlane) AcceptTransfer(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (dp *DataPlane) Teardown() error {
+func (dp *DataListener) Teardown() error {
 	// Create a context with timeout for graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

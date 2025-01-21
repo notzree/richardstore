@@ -19,139 +19,464 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Raft_AppendEntries_FullMethodName = "/raft.Raft/AppendEntries"
-	Raft_RequestVote_FullMethodName   = "/raft.Raft/RequestVote"
+	DataNode_ReplicateFile_FullMethodName = "/raft.DataNode/ReplicateFile"
+	DataNode_WriteFile_FullMethodName     = "/raft.DataNode/WriteFile"
+	DataNode_ReadFile_FullMethodName      = "/raft.DataNode/ReadFile"
 )
 
-// RaftClient is the client API for Raft service.
+// DataNodeClient is the client API for DataNode service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-type RaftClient interface {
-	AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error)
-	RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error)
+type DataNodeClient interface {
+	ReplicateFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ReplicateFileRequest, CommandResponse], error)
+	WriteFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse], error)
+	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileResponse], error)
 }
 
-type raftClient struct {
+type dataNodeClient struct {
 	cc grpc.ClientConnInterface
 }
 
-func NewRaftClient(cc grpc.ClientConnInterface) RaftClient {
-	return &raftClient{cc}
+func NewDataNodeClient(cc grpc.ClientConnInterface) DataNodeClient {
+	return &dataNodeClient{cc}
 }
 
-func (c *raftClient) AppendEntries(ctx context.Context, in *AppendEntriesRequest, opts ...grpc.CallOption) (*AppendEntriesResponse, error) {
+func (c *dataNodeClient) ReplicateFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ReplicateFileRequest, CommandResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(AppendEntriesResponse)
-	err := c.cc.Invoke(ctx, Raft_AppendEntries_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &DataNode_ServiceDesc.Streams[0], DataNode_ReplicateFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[ReplicateFileRequest, CommandResponse]{ClientStream: stream}
+	return x, nil
 }
 
-func (c *raftClient) RequestVote(ctx context.Context, in *RequestVoteRequest, opts ...grpc.CallOption) (*RequestVoteResponse, error) {
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_ReplicateFileClient = grpc.ClientStreamingClient[ReplicateFileRequest, CommandResponse]
+
+func (c *dataNodeClient) WriteFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RequestVoteResponse)
-	err := c.cc.Invoke(ctx, Raft_RequestVote_FullMethodName, in, out, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &DataNode_ServiceDesc.Streams[1], DataNode_WriteFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &grpc.GenericClientStream[WriteFileRequest, WriteFileResponse]{ClientStream: stream}
+	return x, nil
 }
 
-// RaftServer is the server API for Raft service.
-// All implementations must embed UnimplementedRaftServer
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_WriteFileClient = grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse]
+
+func (c *dataNodeClient) ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DataNode_ServiceDesc.Streams[2], DataNode_ReadFile_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ReadFileRequest, ReadFileResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_ReadFileClient = grpc.ServerStreamingClient[ReadFileResponse]
+
+// DataNodeServer is the server API for DataNode service.
+// All implementations must embed UnimplementedDataNodeServer
 // for forward compatibility.
-type RaftServer interface {
-	AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error)
-	RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error)
-	mustEmbedUnimplementedRaftServer()
+type DataNodeServer interface {
+	ReplicateFile(grpc.ClientStreamingServer[ReplicateFileRequest, CommandResponse]) error
+	WriteFile(grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]) error
+	ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileResponse]) error
+	mustEmbedUnimplementedDataNodeServer()
 }
 
-// UnimplementedRaftServer must be embedded to have
+// UnimplementedDataNodeServer must be embedded to have
 // forward compatible implementations.
 //
 // NOTE: this should be embedded by value instead of pointer to avoid a nil
 // pointer dereference when methods are called.
-type UnimplementedRaftServer struct{}
+type UnimplementedDataNodeServer struct{}
 
-func (UnimplementedRaftServer) AppendEntries(context.Context, *AppendEntriesRequest) (*AppendEntriesResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method AppendEntries not implemented")
+func (UnimplementedDataNodeServer) ReplicateFile(grpc.ClientStreamingServer[ReplicateFileRequest, CommandResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ReplicateFile not implemented")
 }
-func (UnimplementedRaftServer) RequestVote(context.Context, *RequestVoteRequest) (*RequestVoteResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method RequestVote not implemented")
+func (UnimplementedDataNodeServer) WriteFile(grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method WriteFile not implemented")
 }
-func (UnimplementedRaftServer) mustEmbedUnimplementedRaftServer() {}
-func (UnimplementedRaftServer) testEmbeddedByValue()              {}
+func (UnimplementedDataNodeServer) ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method ReadFile not implemented")
+}
+func (UnimplementedDataNodeServer) mustEmbedUnimplementedDataNodeServer() {}
+func (UnimplementedDataNodeServer) testEmbeddedByValue()                  {}
 
-// UnsafeRaftServer may be embedded to opt out of forward compatibility for this service.
-// Use of this interface is not recommended, as added methods to RaftServer will
+// UnsafeDataNodeServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to DataNodeServer will
 // result in compilation errors.
-type UnsafeRaftServer interface {
-	mustEmbedUnimplementedRaftServer()
+type UnsafeDataNodeServer interface {
+	mustEmbedUnimplementedDataNodeServer()
 }
 
-func RegisterRaftServer(s grpc.ServiceRegistrar, srv RaftServer) {
-	// If the following call pancis, it indicates UnimplementedRaftServer was
+func RegisterDataNodeServer(s grpc.ServiceRegistrar, srv DataNodeServer) {
+	// If the following call pancis, it indicates UnimplementedDataNodeServer was
 	// embedded by pointer and is nil.  This will cause panics if an
 	// unimplemented method is ever invoked, so we test this at initialization
 	// time to prevent it from happening at runtime later due to I/O.
 	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
 		t.testEmbeddedByValue()
 	}
-	s.RegisterService(&Raft_ServiceDesc, srv)
+	s.RegisterService(&DataNode_ServiceDesc, srv)
 }
 
-func _Raft_AppendEntries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(AppendEntriesRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(RaftServer).AppendEntries(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Raft_AppendEntries_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RaftServer).AppendEntries(ctx, req.(*AppendEntriesRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+func _DataNode_ReplicateFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(DataNodeServer).ReplicateFile(&grpc.GenericServerStream[ReplicateFileRequest, CommandResponse]{ServerStream: stream})
 }
 
-func _Raft_RequestVote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RequestVoteRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(RaftServer).RequestVote(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Raft_RequestVote_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(RaftServer).RequestVote(ctx, req.(*RequestVoteRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_ReplicateFileServer = grpc.ClientStreamingServer[ReplicateFileRequest, CommandResponse]
+
+func _DataNode_WriteFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(DataNodeServer).WriteFile(&grpc.GenericServerStream[WriteFileRequest, WriteFileResponse]{ServerStream: stream})
 }
 
-// Raft_ServiceDesc is the grpc.ServiceDesc for Raft service.
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_WriteFileServer = grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]
+
+func _DataNode_ReadFile_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ReadFileRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DataNodeServer).ReadFile(m, &grpc.GenericServerStream[ReadFileRequest, ReadFileResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataNode_ReadFileServer = grpc.ServerStreamingServer[ReadFileResponse]
+
+// DataNode_ServiceDesc is the grpc.ServiceDesc for DataNode service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
-var Raft_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "raft.Raft",
-	HandlerType: (*RaftServer)(nil),
-	Methods: []grpc.MethodDesc{
+var DataNode_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "raft.DataNode",
+	HandlerType: (*DataNodeServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "AppendEntries",
-			Handler:    _Raft_AppendEntries_Handler,
+			StreamName:    "ReplicateFile",
+			Handler:       _DataNode_ReplicateFile_Handler,
+			ClientStreams: true,
 		},
 		{
-			MethodName: "RequestVote",
-			Handler:    _Raft_RequestVote_Handler,
+			StreamName:    "WriteFile",
+			Handler:       _DataNode_WriteFile_Handler,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "ReadFile",
+			Handler:       _DataNode_ReadFile_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "proto/schema.proto",
+}
+
+const (
+	NameNode_CreateFile_FullMethodName             = "/raft.NameNode/CreateFile"
+	NameNode_ReadFile_FullMethodName               = "/raft.NameNode/ReadFile"
+	NameNode_DeleteFile_FullMethodName             = "/raft.NameNode/DeleteFile"
+	NameNode_Heartbeat_FullMethodName              = "/raft.NameNode/Heartbeat"
+	NameNode_BlockReport_FullMethodName            = "/raft.NameNode/BlockReport"
+	NameNode_IncrementalBlockReport_FullMethodName = "/raft.NameNode/IncrementalBlockReport"
+)
+
+// NameNodeClient is the client API for NameNode service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type NameNodeClient interface {
+	CreateFile(ctx context.Context, in *CreateFileRequest, opts ...grpc.CallOption) (*CreateFileResponse, error)
+	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (*ReadFileResponse, error)
+	DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error)
+	// -- Consensus --
+	// followers -> leader (lightweight)
+	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error)
+	// followers -> leader (full inventory)
+	BlockReport(ctx context.Context, in *BlockReportRequest, opts ...grpc.CallOption) (*BlockReportResponse, error)
+	IncrementalBlockReport(ctx context.Context, in *IncrementalBlockReportRequest, opts ...grpc.CallOption) (*BlockReportResponse, error)
+}
+
+type nameNodeClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewNameNodeClient(cc grpc.ClientConnInterface) NameNodeClient {
+	return &nameNodeClient{cc}
+}
+
+func (c *nameNodeClient) CreateFile(ctx context.Context, in *CreateFileRequest, opts ...grpc.CallOption) (*CreateFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CreateFileResponse)
+	err := c.cc.Invoke(ctx, NameNode_CreateFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nameNodeClient) ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (*ReadFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReadFileResponse)
+	err := c.cc.Invoke(ctx, NameNode_ReadFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nameNodeClient) DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteFileResponse)
+	err := c.cc.Invoke(ctx, NameNode_DeleteFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nameNodeClient) Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*HeartbeatResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HeartbeatResponse)
+	err := c.cc.Invoke(ctx, NameNode_Heartbeat_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nameNodeClient) BlockReport(ctx context.Context, in *BlockReportRequest, opts ...grpc.CallOption) (*BlockReportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BlockReportResponse)
+	err := c.cc.Invoke(ctx, NameNode_BlockReport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nameNodeClient) IncrementalBlockReport(ctx context.Context, in *IncrementalBlockReportRequest, opts ...grpc.CallOption) (*BlockReportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BlockReportResponse)
+	err := c.cc.Invoke(ctx, NameNode_IncrementalBlockReport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// NameNodeServer is the server API for NameNode service.
+// All implementations must embed UnimplementedNameNodeServer
+// for forward compatibility.
+type NameNodeServer interface {
+	CreateFile(context.Context, *CreateFileRequest) (*CreateFileResponse, error)
+	ReadFile(context.Context, *ReadFileRequest) (*ReadFileResponse, error)
+	DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error)
+	// -- Consensus --
+	// followers -> leader (lightweight)
+	Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error)
+	// followers -> leader (full inventory)
+	BlockReport(context.Context, *BlockReportRequest) (*BlockReportResponse, error)
+	IncrementalBlockReport(context.Context, *IncrementalBlockReportRequest) (*BlockReportResponse, error)
+	mustEmbedUnimplementedNameNodeServer()
+}
+
+// UnimplementedNameNodeServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedNameNodeServer struct{}
+
+func (UnimplementedNameNodeServer) CreateFile(context.Context, *CreateFileRequest) (*CreateFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateFile not implemented")
+}
+func (UnimplementedNameNodeServer) ReadFile(context.Context, *ReadFileRequest) (*ReadFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ReadFile not implemented")
+}
+func (UnimplementedNameNodeServer) DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DeleteFile not implemented")
+}
+func (UnimplementedNameNodeServer) Heartbeat(context.Context, *HeartbeatRequest) (*HeartbeatResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Heartbeat not implemented")
+}
+func (UnimplementedNameNodeServer) BlockReport(context.Context, *BlockReportRequest) (*BlockReportResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BlockReport not implemented")
+}
+func (UnimplementedNameNodeServer) IncrementalBlockReport(context.Context, *IncrementalBlockReportRequest) (*BlockReportResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method IncrementalBlockReport not implemented")
+}
+func (UnimplementedNameNodeServer) mustEmbedUnimplementedNameNodeServer() {}
+func (UnimplementedNameNodeServer) testEmbeddedByValue()                  {}
+
+// UnsafeNameNodeServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to NameNodeServer will
+// result in compilation errors.
+type UnsafeNameNodeServer interface {
+	mustEmbedUnimplementedNameNodeServer()
+}
+
+func RegisterNameNodeServer(s grpc.ServiceRegistrar, srv NameNodeServer) {
+	// If the following call pancis, it indicates UnimplementedNameNodeServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&NameNode_ServiceDesc, srv)
+}
+
+func _NameNode_CreateFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NameNodeServer).CreateFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NameNode_CreateFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NameNodeServer).CreateFile(ctx, req.(*CreateFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NameNode_ReadFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReadFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NameNodeServer).ReadFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NameNode_ReadFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NameNodeServer).ReadFile(ctx, req.(*ReadFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NameNode_DeleteFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NameNodeServer).DeleteFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NameNode_DeleteFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NameNodeServer).DeleteFile(ctx, req.(*DeleteFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NameNode_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HeartbeatRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NameNodeServer).Heartbeat(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NameNode_Heartbeat_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NameNodeServer).Heartbeat(ctx, req.(*HeartbeatRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NameNode_BlockReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BlockReportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NameNodeServer).BlockReport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NameNode_BlockReport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NameNodeServer).BlockReport(ctx, req.(*BlockReportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NameNode_IncrementalBlockReport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IncrementalBlockReportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NameNodeServer).IncrementalBlockReport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NameNode_IncrementalBlockReport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NameNodeServer).IncrementalBlockReport(ctx, req.(*IncrementalBlockReportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// NameNode_ServiceDesc is the grpc.ServiceDesc for NameNode service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var NameNode_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "raft.NameNode",
+	HandlerType: (*NameNodeServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateFile",
+			Handler:    _NameNode_CreateFile_Handler,
+		},
+		{
+			MethodName: "ReadFile",
+			Handler:    _NameNode_ReadFile_Handler,
+		},
+		{
+			MethodName: "DeleteFile",
+			Handler:    _NameNode_DeleteFile_Handler,
+		},
+		{
+			MethodName: "Heartbeat",
+			Handler:    _NameNode_Heartbeat_Handler,
+		},
+		{
+			MethodName: "BlockReport",
+			Handler:    _NameNode_BlockReport_Handler,
+		},
+		{
+			MethodName: "IncrementalBlockReport",
+			Handler:    _NameNode_IncrementalBlockReport_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

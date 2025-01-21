@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -14,31 +14,8 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/notzree/richardstore/proto"
+	"golang.org/x/sys/unix"
 )
-
-type StorageStateMachine struct {
-	Storer Store
-}
-
-func (s *StorageStateMachine) Apply(cmd *proto.Command) (*ApplyResult, error) {
-	switch cmd.Type {
-	case proto.CommandType_COMMAND_TYPE_UNSPECIFIED:
-		// will return empty ApplyResult
-	case proto.CommandType_COMMAND_TYPE_WRITE:
-		var spec_cmd proto.WriteCommand
-		if err := DeserializeCommand(cmd, &spec_cmd); err != nil {
-			return nil, err
-		}
-		return &ApplyResult{}, nil
-
-	case proto.CommandType_COMMAND_TYPE_DELETE:
-		// todo
-	case proto.CommandType_COMMAND_TYPE_CONFIG:
-		// unimplemented
-	}
-	return &ApplyResult{}, nil
-}
 
 type StoreOpts struct {
 	blockSize int
@@ -110,7 +87,7 @@ func (s *Store) releaseLock(key string) error {
 // FileAddress may not exist on file system.
 // Always root + "/" + created_path
 func (s *Store) CreateAddress(r io.Reader) (FileAddress, error) {
-	hash := sha1.New()
+	hash := sha256.New()
 	_, err := io.Copy(hash, r)
 	if err != nil {
 		return FileAddress{}, err
@@ -194,7 +171,7 @@ func (s *Store) Has(key string) bool {
 }
 
 // Read returs and io.Reader with the underlying bytes from the given key.
-func (s *Store) Read(key string) (io.Reader, error) {
+func (s *Store) Read(key string) (io.ReadCloser, error) {
 	fileLock := s.getLock(key)
 	defer s.releaseLock(key)
 
@@ -205,10 +182,7 @@ func (s *Store) Read(key string) (io.Reader, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	buf := new(bytes.Buffer)
-	_, err = io.Copy(buf, f)
-	return buf, err
+	return f, nil
 }
 
 // readStream reads a file from a Hash
@@ -221,21 +195,80 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 }
 
 func (s *Store) Write(r io.Reader) (string, error) {
-	buff := new(bytes.Buffer)
-	tee := io.TeeReader(r, buff) // writes to buffer what it reads from R
-	addr, err := s.CreateAddress(tee)
-	if err != nil {
-		return "", err
-	}
-	log.Println(buff.Bytes())
 
-	fileLock := s.getLock(addr.HashStr)
-	defer s.releaseLock(addr.HashStr)
+	if err := os.MkdirAll(s.root, fs.ModePerm); err != nil {
+		return "", fmt.Errorf("failed to create root directory: %w", err)
+	}
+	tempFile, err := os.CreateTemp(s.root, "temp-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+
+	// Clean up temp file if anything goes wrong
+	defer func() {
+		tempFile.Close()
+		if err != nil {
+			os.Remove(tempPath)
+		}
+	}()
+
+	h := sha256.New()
+	writer := io.MultiWriter(tempFile, h)
+
+	if _, err = io.Copy(writer, r); err != nil {
+		return "", fmt.Errorf("failed to write data: %w", err)
+	}
+
+	// Get address using existing function
+	hashStr := hex.EncodeToString(h.Sum(nil))
+	address, err := s.GetAddress(hashStr)
+	if err != nil {
+		return "", fmt.Errorf("failed to create address: %w", err)
+	}
+
+	// Get lock before moving file to final location
+	fileLock := s.getLock(address.HashStr)
+	defer s.releaseLock(address.HashStr)
 	fileLock.Lock()
 	defer fileLock.Unlock()
 
-	return s.writeStream(buff)
+	// Create directories
+	if err := os.MkdirAll(address.PathName, fs.ModePerm); err != nil {
+		return "", fmt.Errorf("failed to create directories: %w", err)
+	}
+
+	// Close temp file before moving it
+	if err = tempFile.Close(); err != nil {
+		return "", fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	// Move temp file to final location
+	if err = os.Rename(tempPath, address.FullPath()); err != nil {
+		return "", fmt.Errorf("failed to move file to final location: %w", err)
+	}
+
+	fmt.Printf("wrote file to disk: %s\n", hashStr)
+	return hashStr, nil
 }
+
+// func (s *Store) Write(r io.Reader) (string, error) {
+// 	buff := new(bytes.Buffer)
+// 	tee := io.TeeReader(r, buff) // writes to buffer what it reads from R
+// 	addr, err := s.CreateAddress(tee)
+// 	if err != nil {
+// 		return "", err
+// 	}
+
+// 	log.Println(buff.Bytes())
+
+// 	fileLock := s.getLock(addr.HashStr)
+// 	defer s.releaseLock(addr.HashStr)
+// 	fileLock.Lock()
+// 	defer fileLock.Unlock()
+
+// 	return s.writeStream(buff)
+// }
 
 // writeStream writes a file into our CAS.
 func (s *Store) writeStream(r io.Reader) (string, error) {
@@ -285,4 +318,14 @@ type FileAddress struct {
 // FullPath returns the full path to the file including the root directory
 func (f *FileAddress) FullPath() string {
 	return f.PathName + "/" + f.HashStr
+}
+
+func (s *Store) GetAvailableCapacity() uint64 {
+	var stat unix.Statfs_t
+	err := unix.Statfs(s.root, &stat)
+	if err != nil {
+		log.Printf("Warning: Could not get disk stats: %v", err)
+		return 1 << 40 // 1TB default for now?
+	}
+	return stat.Bavail * uint64(stat.Bsize)
 }
