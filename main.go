@@ -2,7 +2,10 @@ package main
 
 import (
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/notzree/richardstore/proto"
 )
 
 func main() {
@@ -16,14 +19,14 @@ func main() {
 	// if err != nil {
 	// 	fmt.Println(err)
 	// }
+	MAXSIMCOMMANDS := 5
+	NUMNODES := 5
 	const (
 		KB          = 1024
 		MB          = 1024 * KB
 		sizeInBytes = 50 * MB
 	)
-	nameNode := NewNameNode(0, ":3000", nil, 3*time.Second, 5)
-	NUMNODES := 5
-	MAXSIMCOMMANDS := 5
+	nameNode := NewNameNode(0, ":3009", nil, 3*time.Second, MAXSIMCOMMANDS)
 	dataNodes := make([]DataNode, NUMNODES+1)
 	peerDataNodes := make([]PeerDataNode, NUMNODES+1)
 	for i := 1; i < (NUMNODES + 1); i++ {
@@ -32,11 +35,12 @@ func main() {
 			blockSize: 5,
 			root:      address,
 		}
-		dataNodes[i] = *NewDataNode(uint64(i), address, NewStore(storeOpts), 50*MB)
+		dataNodes[i] = *NewDataNode(uint64(i), address, NewStore(storeOpts), MAXSIMCOMMANDS, 50*MB)
 		peerDataNodes[i] = *dataNodes[i].PeerRepresentation()
 	}
 
 	nameNode.AddDataNodes(peerDataNodes)
+	go nameNode.Run()
 
 	for i := 1; i < (NUMNODES + 1); i++ {
 		dataNodes[i].NameNode = *nameNode.PeerRepresentation()
@@ -49,14 +53,30 @@ func main() {
 			}
 		}
 		dataNodes[i].AddDataNodes(peers)
-
-		dataNodes[i].InitializeClients()
-		go func(idx int) { // Pass i as parameter
-			dataNodes[idx].StartRPCServer()
-			defer dataNodes[idx].CloseAllClients()
-		}(i)
+		go dataNodes[i].Run()
 	}
 
-	time.Sleep(time.Second * 500)
+	testData := "momsbestpicture"
+	hash, err := dataNodes[1].Storer.Write(strings.NewReader(testData))
+	if err != nil {
+		panic(err)
+	}
+
+	mockReplicationCmd := &proto.Command{
+		Command: &proto.Command_Replicate{
+			Replicate: &proto.ReplicateCommand{
+				FileInfo: &proto.FileInfo{
+					Hash:            hash,
+					Size:            0,
+					GenerationStamp: uint64(time.Now().UnixNano()),
+				},
+				TargetNodes: []uint64{2, 3},
+			},
+		},
+	}
+	time.Sleep(time.Second * 1)
+	nameNode.Commands[1] = append(nameNode.Commands[1], mockReplicationCmd)
+	dataNodes[1].SendHeartbeat()
+	time.Sleep(time.Second * 100)
 
 }

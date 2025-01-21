@@ -95,6 +95,11 @@ func NewDataNode(Id uint64, address string, storer *Store, maxSimCommands int, c
 		cmdChan:   make(chan *proto.Command, maxSimCommands),
 	}
 }
+func (node *DataNode) Run() error {
+	node.InitializeClients()
+	go node.HandleCommands()
+	return node.StartRPCServer()
+}
 
 func (node *DataNode) StartRPCServer() error {
 	ln, err := net.Listen("tcp", node.address)
@@ -110,7 +115,70 @@ func (node *DataNode) StartRPCServer() error {
 
 // handle replication stream (datanode -> peer datanode)
 func (node *DataNode) ReplicateFile(stream grpc.ClientStreamingServer[proto.ReplicateFileRequest, proto.CommandResponse]) error {
-	return nil
+	// Get the first message containing the command
+	firstMsg, err := stream.Recv()
+	if err != nil {
+		return fmt.Errorf("failed to receive initial command: %w", err)
+	}
+
+	repCmd, ok := firstMsg.Request.(*proto.ReplicateFileRequest_Command)
+	if !ok {
+		return fmt.Errorf("first message must be a command")
+	}
+
+	cmd := repCmd.Command
+	expectedFileHash := cmd.FileInfo.Hash
+
+	// Create a pipe to connect the stream to an io.Reader
+	pr, pw := io.Pipe()
+
+	// Start a goroutine to read from the stream and write to the pipe
+	go func() {
+		defer pw.Close() // Make sure we close the writer when done
+
+		for {
+			msg, err := stream.Recv()
+			if err == io.EOF {
+				return
+			}
+			if err != nil {
+				pw.CloseWithError(fmt.Errorf("error receiving chunk: %w", err))
+				return
+			}
+
+			chunk, ok := msg.Request.(*proto.ReplicateFileRequest_Chunk)
+			if !ok {
+				pw.CloseWithError(fmt.Errorf("expected chunk message"))
+				return
+			}
+
+			_, err = pw.Write(chunk.Chunk)
+			if err != nil {
+				pw.CloseWithError(fmt.Errorf("error writing to pipe: %w", err))
+				return
+			}
+		}
+	}()
+
+	// Pass the reader end of the pipe to Write()
+	hash, err := node.Storer.Write(pr)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+	if hash != expectedFileHash {
+		return fmt.Errorf("file hash mismatch expecte %s got %s", expectedFileHash, hash)
+	}
+	if len(cmd.TargetNodes) > 0 {
+		node.cmdChan <- &proto.Command{
+			Command: &proto.Command_Replicate{
+				Replicate: cmd,
+			},
+		}
+	}
+	log.Printf("File replication completed for node %d", node.Id)
+	return stream.SendAndClose(&proto.CommandResponse{
+		Success: true,
+	})
 }
 
 func (node *DataNode) WriteFile(stream grpc.ClientStreamingServer[proto.WriteFileRequest, proto.WriteFileResponse]) error {
@@ -157,6 +225,7 @@ func (node *DataNode) HandleCommands() error {
 	for {
 		select {
 		case cmd := <-node.cmdChan:
+			log.Printf("received cmd %v", cmd)
 			switch c := cmd.Command.(type) {
 			case *proto.Command_Replicate:
 				err := node.handleReplication(c.Replicate)
@@ -197,13 +266,14 @@ func (node *DataNode) handleReplication(cmd *proto.ReplicateCommand) error {
 		return err
 	}
 	defer fr.Close()
+	log.Printf("remaining targets %d", len(cmd.TargetNodes))
+	// Might not need this here tbh
 	if len(cmd.TargetNodes) == 0 {
 		log.Printf("end of replication chain reached with node %d", node.Id)
 		return nil
 	}
 	target := cmd.TargetNodes[0]
 	remaining := cmd.TargetNodes[1:]
-
 	node.clientsMu.Lock()
 	defer node.clientsMu.Unlock()
 
@@ -212,7 +282,7 @@ func (node *DataNode) handleReplication(cmd *proto.ReplicateCommand) error {
 	if err != nil {
 		return fmt.Errorf("failed to create stream: %w", err)
 	}
-
+	log.Printf("sending first message to node: %d\n", target)
 	// First send the command
 	err = stream.Send(&proto.ReplicateFileRequest{
 		Request: &proto.ReplicateFileRequest_Command{
@@ -257,7 +327,6 @@ func (node *DataNode) handleReplication(cmd *proto.ReplicateCommand) error {
 		return fmt.Errorf("failed to replicate file: %s to node: %d", cmd.FileInfo.Hash, target)
 	}
 
-	log.Printf("File replication completed for %s", cmd.FileInfo.Hash)
 	return nil
 }
 
@@ -295,6 +364,17 @@ func (node *DataNode) AddDataNodes(dataNodesSlice []PeerDataNode) {
 
 func (node *DataNode) InitializeClients() error {
 	node.clientsMu.Lock()
+	defer node.clientsMu.Unlock()
+	// Create name node connection
+	if node.NameNode.client == nil {
+		c, err := NewNameNodeClient(node.NameNode.address)
+		if err != nil {
+			return err
+		}
+		node.NameNode.client = c
+	}
+
+	// Connect w/ peers
 	for id, peer := range node.DataNodes {
 		c, err := NewDataNodeClient(peer.Address)
 		if err != nil {
@@ -307,3 +387,8 @@ func (node *DataNode) InitializeClients() error {
 	return nil
 
 }
+
+//NEXT STEPS:
+// Finish up 2nd half of replication process
+// Work on writing files
+// write a wrapper to start rpc server, initialize clients, poll commands

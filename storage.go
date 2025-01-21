@@ -195,21 +195,80 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 }
 
 func (s *Store) Write(r io.Reader) (string, error) {
-	buff := new(bytes.Buffer)
-	tee := io.TeeReader(r, buff) // writes to buffer what it reads from R
-	addr, err := s.CreateAddress(tee)
-	if err != nil {
-		return "", err
-	}
-	log.Println(buff.Bytes())
 
-	fileLock := s.getLock(addr.HashStr)
-	defer s.releaseLock(addr.HashStr)
+	if err := os.MkdirAll(s.root, fs.ModePerm); err != nil {
+		return "", fmt.Errorf("failed to create root directory: %w", err)
+	}
+	tempFile, err := os.CreateTemp(s.root, "temp-*")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+
+	// Clean up temp file if anything goes wrong
+	defer func() {
+		tempFile.Close()
+		if err != nil {
+			os.Remove(tempPath)
+		}
+	}()
+
+	h := sha256.New()
+	writer := io.MultiWriter(tempFile, h)
+
+	if _, err = io.Copy(writer, r); err != nil {
+		return "", fmt.Errorf("failed to write data: %w", err)
+	}
+
+	// Get address using existing function
+	hashStr := hex.EncodeToString(h.Sum(nil))
+	address, err := s.GetAddress(hashStr)
+	if err != nil {
+		return "", fmt.Errorf("failed to create address: %w", err)
+	}
+
+	// Get lock before moving file to final location
+	fileLock := s.getLock(address.HashStr)
+	defer s.releaseLock(address.HashStr)
 	fileLock.Lock()
 	defer fileLock.Unlock()
 
-	return s.writeStream(buff)
+	// Create directories
+	if err := os.MkdirAll(address.PathName, fs.ModePerm); err != nil {
+		return "", fmt.Errorf("failed to create directories: %w", err)
+	}
+
+	// Close temp file before moving it
+	if err = tempFile.Close(); err != nil {
+		return "", fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	// Move temp file to final location
+	if err = os.Rename(tempPath, address.FullPath()); err != nil {
+		return "", fmt.Errorf("failed to move file to final location: %w", err)
+	}
+
+	fmt.Printf("wrote file to disk: %s\n", hashStr)
+	return hashStr, nil
 }
+
+// func (s *Store) Write(r io.Reader) (string, error) {
+// 	buff := new(bytes.Buffer)
+// 	tee := io.TeeReader(r, buff) // writes to buffer what it reads from R
+// 	addr, err := s.CreateAddress(tee)
+// 	if err != nil {
+// 		return "", err
+// 	}
+
+// 	log.Println(buff.Bytes())
+
+// 	fileLock := s.getLock(addr.HashStr)
+// 	defer s.releaseLock(addr.HashStr)
+// 	fileLock.Lock()
+// 	defer fileLock.Unlock()
+
+// 	return s.writeStream(buff)
+// }
 
 // writeStream writes a file into our CAS.
 func (s *Store) writeStream(r io.Reader) (string, error) {

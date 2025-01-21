@@ -38,7 +38,7 @@ const (
 type PeerNameNode struct {
 	Id      uint64
 	address string
-	client  NameNodeClient
+	client  *NameNodeClient
 }
 
 type NameNodeClient struct {
@@ -47,13 +47,20 @@ type NameNodeClient struct {
 }
 
 func NewNameNodeClient(address string) (*NameNodeClient, error) {
+	log.Printf("Attempting to connect to namenode at %s", address)
+
+	// Force the connection attempt to be blocking so we can see what's happening
 	conn, err := grpc.NewClient(
 		address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTimeout(5*time.Second), // Add timeout so it doesn't hang forever
 	)
 	if err != nil {
+		log.Printf("Failed to connect to %s: %v", address, err)
 		return nil, err
 	}
+
+	log.Printf("Successfully connected to namenode at %s", address)
 
 	return &NameNodeClient{
 		conn:   conn,
@@ -112,14 +119,14 @@ func NewNameNode(Id uint64, address string, dataNodesSlice []PeerDataNode, hbInt
 }
 
 func (node *NameNode) PeerRepresentation() *PeerNameNode {
-	c, err := NewNameNodeClient(node.address)
-	if err != nil {
-		panic("failed to initiate name node connection")
-	}
+	// c, err := NewNameNodeClient(node.address)
+	// if err != nil {
+	// 	panic("failed to initiate name node connection")
+	// }
 	return &PeerNameNode{
 		Id:      node.Id,
 		address: node.address,
-		client:  *c,
+		client:  nil,
 	}
 }
 
@@ -131,6 +138,11 @@ func (node *NameNode) AddDataNodes(dataNodesSlice []PeerDataNode) {
 		dnCopy := dn
 		node.DataNodes[dn.Id] = &dnCopy
 	}
+}
+
+func (node *NameNode) Run() error {
+	// Add more event loops as required
+	return node.StartRPCServer()
 }
 
 func (node *NameNode) StartRPCServer() error {
@@ -271,7 +283,7 @@ func (node *NameNode) BlockReport(ctx context.Context, req *proto.BlockReportReq
 
 }
 
-func (node *NameNode) HeartBeat(ctx context.Context, req *proto.HeartbeatRequest) (resp *proto.HeartbeatResponse, err error) {
+func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest) (resp *proto.HeartbeatResponse, err error) {
 	node.dnMu.Lock()
 	defer node.dnMu.Unlock()
 	peerDataNode, exist := node.DataNodes[req.NodeId]
