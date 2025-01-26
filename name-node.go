@@ -175,7 +175,7 @@ func (node *NameNode) CreateFile(ctx context.Context, req *proto.CreateFileReque
 		}
 	}
 	if len(nodes) < numRequiredNodes {
-		return nil, fmt.Errorf("insufficient available datanodes for replication factor %d: need %d, found %d",
+		return nil, fmt.Errorf("insufficient available datanodes for replication factor %.0f: need %d, found %d",
 			req.MinReplicationFactor, numRequiredNodes, len(nodes))
 	}
 	return &proto.CreateFileResponse{
