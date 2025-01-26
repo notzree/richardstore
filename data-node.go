@@ -182,6 +182,70 @@ func (node *DataNode) ReplicateFile(stream grpc.ClientStreamingServer[proto.Repl
 }
 
 func (node *DataNode) WriteFile(stream grpc.ClientStreamingServer[proto.WriteFileRequest, proto.WriteFileResponse]) error {
+	firstMsg, err := stream.Recv()
+	if err != nil {
+		return fmt.Errorf("failed to receive initial command: %w", err)
+	}
+	resp, ok := firstMsg.Request.(*proto.WriteFileRequest_FileInfo)
+	if !ok {
+		return fmt.Errorf("first message must be a command")
+	}
+
+	expectedFileHash := resp.FileInfo.Hash
+
+	// Create a pipe to connect the stream to an io.Reader
+	pr, pw := io.Pipe()
+
+	// Start a goroutine to read from the stream and write to the pipe
+	go func() {
+		defer pw.Close() // Make sure we close the writer when done
+
+		for {
+			msg, err := stream.Recv()
+			if err == io.EOF {
+				return
+			}
+			if err != nil {
+				pw.CloseWithError(fmt.Errorf("error receiving chunk: %w", err))
+				return
+			}
+
+			chunk, ok := msg.Request.(*proto.WriteFileRequest_Chunk)
+			if !ok {
+				pw.CloseWithError(fmt.Errorf("expected chunk message"))
+				return
+			}
+
+			_, err = pw.Write(chunk.Chunk)
+			if err != nil {
+				pw.CloseWithError(fmt.Errorf("error writing to pipe: %w", err))
+				return
+			}
+		}
+	}()
+
+	// Pass the reader end of the pipe to Write()
+	hash, err := node.Storer.Write(pr)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+	if hash != expectedFileHash {
+		return fmt.Errorf("file hash mismatch expecte %s got %s", expectedFileHash, hash)
+	}
+
+	// TODO: Do we need to replicate from the datanode? or client alr does parallel stream
+	// if len(cmd.TargetNodes) > 0 {
+	// 	node.cmdChan <- &proto.Command{
+	// 		Command: &proto.Command_Replicate{
+	// 			Replicate: cmd,
+	// 		},
+	// 	}
+	// }
+	log.Printf("File replication completed for node %d", node.Id)
+	stream.SendAndClose(&proto.WriteFileResponse{
+		Success: true,
+	})
+
 	return nil
 }
 

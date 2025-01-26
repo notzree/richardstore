@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -195,7 +194,6 @@ func (s *Store) readStream(key string) (io.ReadCloser, error) {
 }
 
 func (s *Store) Write(r io.Reader) (string, error) {
-
 	if err := os.MkdirAll(s.root, fs.ModePerm); err != nil {
 		return "", fmt.Errorf("failed to create root directory: %w", err)
 	}
@@ -214,8 +212,9 @@ func (s *Store) Write(r io.Reader) (string, error) {
 	}()
 
 	h := sha256.New()
-	writer := io.MultiWriter(tempFile, h)
 
+	writer := io.MultiWriter(tempFile, h)
+	// Stream data from reader to MultiWriter which streams to -> tempFile, h
 	if _, err = io.Copy(writer, r); err != nil {
 		return "", fmt.Errorf("failed to write data: %w", err)
 	}
@@ -271,39 +270,39 @@ func (s *Store) Write(r io.Reader) (string, error) {
 // }
 
 // writeStream writes a file into our CAS.
-func (s *Store) writeStream(r io.Reader) (string, error) {
-	var buf1, buf2 bytes.Buffer
-	r = io.TeeReader(r, io.MultiWriter(&buf1, &buf2)) // using teeReader to 'clone' the file to read twice (once for hash, another to save it)
-	_, err := io.Copy(&buf1, r)
-	if err != nil {
-		return "", err
-	}
+// func (s *Store) writeStream(r io.Reader) (string, error) {
+// 	var buf1, buf2 bytes.Buffer
+// 	r = io.TeeReader(r, io.MultiWriter(&buf1, &buf2)) // using teeReader to 'clone' the file to read twice (once for hash, another to save it)
+// 	_, err := io.Copy(&buf1, r)
+// 	if err != nil {
+// 		return "", err
+// 	}
 
-	address, err := s.CreateAddress(&buf1)
-	if err != nil {
-		return "", err
-	}
+// 	address, err := s.CreateAddress(&buf1)
+// 	if err != nil {
+// 		return "", err
+// 	}
 
-	// Create necessary directories
-	if err := os.MkdirAll(address.PathName, fs.ModePerm); err != nil {
-		return "", err
-	}
+// 	// Create necessary directories
+// 	if err := os.MkdirAll(address.PathName, fs.ModePerm); err != nil {
+// 		return "", err
+// 	}
 
-	// Create the file and copy the stream to it
-	f, err := os.Create(address.FullPath())
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
+// 	// Create the file and copy the stream to it
+// 	f, err := os.Create(address.FullPath())
+// 	if err != nil {
+// 		return "", err
+// 	}
+// 	defer f.Close()
 
-	n, err := io.Copy(f, &buf2)
-	if err != nil {
-		return "", err
-	}
+// 	n, err := io.Copy(f, &buf2)
+// 	if err != nil {
+// 		return "", err
+// 	}
 
-	fmt.Printf("wrote %d bytes to disk, %s\n", n, address.HashStr)
-	return address.HashStr, nil
-}
+// 	fmt.Printf("wrote %d bytes to disk, %s\n", n, address.HashStr)
+// 	return address.HashStr, nil
+// }
 
 // Clear deletes the root and all subdirectories
 func (s *Store) Clear() error {

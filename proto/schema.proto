@@ -1,6 +1,7 @@
 syntax = "proto3";
 package raft;
 option go_package = "github.com/notzree/richardstore/proto";
+import "google/protobuf/empty.proto";
 
 service DataNode{
   rpc ReplicateFile(stream ReplicateFileRequest) returns (CommandResponse);
@@ -36,6 +37,7 @@ service NameNode {
   rpc CreateFile (CreateFileRequest) returns (CreateFileResponse);
   rpc ReadFile (ReadFileRequest) returns (ReadFileResponse);
   rpc DeleteFile (DeleteFileRequest) returns (DeleteFileResponse);
+  rpc Info(google.protobuf.Empty) returns (NameNodeInfo);
 
   // -- Consensus --
   // followers -> leader (lightweight)
@@ -45,8 +47,14 @@ service NameNode {
   rpc IncrementalBlockReport(IncrementalBlockReportRequest) returns (BlockReportResponse);
 
 }
+
+message NameNodeInfo {
+    repeated DataNodeInfo data_nodes = 1;
+}
+
+
 message CreateFileRequest {
-  uint32 min_replication_factor = 1;
+  float min_replication_factor = 1;
   uint64 size = 2;
 }
 
@@ -77,7 +85,7 @@ message DeleteFileResponse {
 
 // Follower sends to leader
 message BlockReportRequest {
-  uint64 node_id = 1;        
+  uint64 node_id = 1;
 
   // File information
   repeated FileInfo held_files = 2;
@@ -105,7 +113,7 @@ message BlockReportResponse {
   uint64 node_id =1;
   repeated Command commands = 2;
   uint64 next_report_delay = 3;  // Suggested delay before next report
-  uint64 report_id = 4;          // ID for this report 
+  uint64 report_id = 4;          // ID for this report
 }
 
 

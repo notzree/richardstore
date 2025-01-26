@@ -11,6 +11,7 @@ import (
 	"github.com/notzree/richardstore/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type FileEntry struct {
@@ -375,4 +376,23 @@ func (node *NameNode) getCommands(id uint64) (cmds []*proto.Command, err error) 
 
 	return commands, nil
 
+}
+
+func (node *NameNode) Info(ctx context.Context, _ *emptypb.Empty) (*proto.NameNodeInfo, error) {
+	node.dnMu.RLock()
+	defer node.dnMu.RUnlock()
+
+	dataNodes := make([]*proto.DataNodeInfo, 0, len(node.DataNodes))
+	for _, dn := range node.DataNodes {
+		if !dn.Alive {
+			continue
+		}
+		dataNodes = append(dataNodes, &proto.DataNodeInfo{
+			Address: dn.Address,
+		})
+	}
+
+	return &proto.NameNodeInfo{
+		DataNodes: dataNodes,
+	}, nil
 }
