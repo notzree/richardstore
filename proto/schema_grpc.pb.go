@@ -31,7 +31,7 @@ const (
 type DataNodeClient interface {
 	ReplicateFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[ReplicateFileRequest, CommandResponse], error)
 	WriteFile(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse], error)
-	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileResponse], error)
+	ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileStream], error)
 }
 
 type dataNodeClient struct {
@@ -68,13 +68,13 @@ func (c *dataNodeClient) WriteFile(ctx context.Context, opts ...grpc.CallOption)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DataNode_WriteFileClient = grpc.ClientStreamingClient[WriteFileRequest, WriteFileResponse]
 
-func (c *dataNodeClient) ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileResponse], error) {
+func (c *dataNodeClient) ReadFile(ctx context.Context, in *ReadFileRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ReadFileStream], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &DataNode_ServiceDesc.Streams[2], DataNode_ReadFile_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[ReadFileRequest, ReadFileResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[ReadFileRequest, ReadFileStream]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func (c *dataNodeClient) ReadFile(ctx context.Context, in *ReadFileRequest, opts
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type DataNode_ReadFileClient = grpc.ServerStreamingClient[ReadFileResponse]
+type DataNode_ReadFileClient = grpc.ServerStreamingClient[ReadFileStream]
 
 // DataNodeServer is the server API for DataNode service.
 // All implementations must embed UnimplementedDataNodeServer
@@ -93,7 +93,7 @@ type DataNode_ReadFileClient = grpc.ServerStreamingClient[ReadFileResponse]
 type DataNodeServer interface {
 	ReplicateFile(grpc.ClientStreamingServer[ReplicateFileRequest, CommandResponse]) error
 	WriteFile(grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]) error
-	ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileResponse]) error
+	ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileStream]) error
 	mustEmbedUnimplementedDataNodeServer()
 }
 
@@ -110,7 +110,7 @@ func (UnimplementedDataNodeServer) ReplicateFile(grpc.ClientStreamingServer[Repl
 func (UnimplementedDataNodeServer) WriteFile(grpc.ClientStreamingServer[WriteFileRequest, WriteFileResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method WriteFile not implemented")
 }
-func (UnimplementedDataNodeServer) ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileResponse]) error {
+func (UnimplementedDataNodeServer) ReadFile(*ReadFileRequest, grpc.ServerStreamingServer[ReadFileStream]) error {
 	return status.Errorf(codes.Unimplemented, "method ReadFile not implemented")
 }
 func (UnimplementedDataNodeServer) mustEmbedUnimplementedDataNodeServer() {}
@@ -153,11 +153,11 @@ func _DataNode_ReadFile_Handler(srv interface{}, stream grpc.ServerStream) error
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(DataNodeServer).ReadFile(m, &grpc.GenericServerStream[ReadFileRequest, ReadFileResponse]{ServerStream: stream})
+	return srv.(DataNodeServer).ReadFile(m, &grpc.GenericServerStream[ReadFileRequest, ReadFileStream]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type DataNode_ReadFileServer = grpc.ServerStreamingServer[ReadFileResponse]
+type DataNode_ReadFileServer = grpc.ServerStreamingServer[ReadFileStream]
 
 // DataNode_ServiceDesc is the grpc.ServiceDesc for DataNode service.
 // It's only intended for direct use with grpc.RegisterService,

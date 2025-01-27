@@ -6,7 +6,7 @@ import "google/protobuf/empty.proto";
 service DataNode{
   rpc ReplicateFile(stream ReplicateFileRequest) returns (CommandResponse);
   rpc WriteFile(stream WriteFileRequest) returns (WriteFileResponse);
-  rpc ReadFile(ReadFileRequest) returns (stream ReadFileResponse);
+  rpc ReadFile(ReadFileRequest) returns (stream ReadFileStream);
 }
 
 message ReplicateFileRequest {
@@ -14,6 +14,13 @@ message ReplicateFileRequest {
     ReplicateCommand command = 1;
     bytes chunk = 2;
   }
+}
+
+message ReadFileStream {
+    oneof request {
+        FileInfo file_info = 1;
+        bytes chunk = 2;
+    }
 }
 
 
