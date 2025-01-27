@@ -238,7 +238,6 @@ func (node *NameNode) DeleteFile(ctx context.Context, req *proto.DeleteFileReque
 }
 
 func (node *NameNode) BlockReport(ctx context.Context, req *proto.BlockReportRequest) (resp *proto.BlockReportResponse, err error) {
-	// block report
 	node.dnMu.Lock()
 	defer node.dnMu.Unlock()
 	peerDataNode, exist := node.DataNodes[req.NodeId]

@@ -233,15 +233,7 @@ func (node *DataNode) WriteFile(stream grpc.ClientStreamingServer[proto.WriteFil
 		return fmt.Errorf("file hash mismatch expecte %s got %s", expectedFileHash, hash)
 	}
 
-	// TODO: Do we need to replicate from the datanode? or client alr does parallel stream
-	// if len(cmd.TargetNodes) > 0 {
-	// 	node.cmdChan <- &proto.Command{
-	// 		Command: &proto.Command_Replicate{
-	// 			Replicate: cmd,
-	// 		},
-	// 	}
-	// }
-	log.Printf("File replication completed for node %d", node.Id)
+	log.Printf("wrote file %s to node %d", hash, node.Id)
 	stream.SendAndClose(&proto.WriteFileResponse{
 		Success: true,
 	})

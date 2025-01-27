@@ -65,6 +65,13 @@ type writeResult struct {
 	err     error
 }
 
+func (c *Client) WriteFile(file *os.File) (string, error) {
+	return c._write(file)
+}
+func (c *Client) ReadFile(hash string) (*io.ReadCloser, error) {
+	return c._read(hash)
+}
+
 func (c *Client) _write(file *os.File) (string, error) {
 	fileInfo, err := file.Stat()
 	if err != nil {
@@ -130,7 +137,6 @@ func (c *Client) _write(file *os.File) (string, error) {
 				resultCh <- writeResult{nodeIdx: idx, success: false, err: fmt.Errorf("failed to send file info: %w", err)}
 				return
 			}
-			log.Printf("sending first req")
 			buf := make([]byte, 1024)
 			for {
 				n, err := file.Read(buf)
@@ -158,12 +164,11 @@ func (c *Client) _write(file *os.File) (string, error) {
 				resultCh <- writeResult{nodeIdx: idx, success: false, err: fmt.Errorf("error receiving response: %w", err)}
 				return
 			}
-
+			log.Printf("node %d reported success", idx)
 			resultCh <- writeResult{nodeIdx: idx, success: resp.Success, err: nil}
 		}(i, targetNode.Address)
 	}
 
-	// Close result channel once all goroutines complete
 	go func() {
 		wg.Wait()
 		close(resultCh)
@@ -191,4 +196,115 @@ func (c *Client) _write(file *os.File) (string, error) {
 	return expectedFileAddr.HashStr, nil
 }
 
-//TODO: IMPLEMENT THE INFO RPC METHOD FOR THE NAME NODE.
+func (c *Client) _read(hash string) (*io.ReadCloser, error) {
+	ctx := context.Background()
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	resp, err := c.NameNodeClient.client.ReadFile(ctxWithTimeout, &proto.ReadFileRequest{
+		Hash: hash,
+	})
+	if err != nil {
+		return nil, err
+	}
+	readerChan := make(chan io.ReadCloser, len(resp.DataNodes))
+	errorChan := make(chan error, len(resp.DataNodes))
+	readCtx, readCancel := context.WithCancel(context.Background())
+	defer readCancel()
+	for _, node := range resp.DataNodes {
+		go func(nodeInfo *proto.DataNodeInfo) {
+			c.mu.RLock()
+			client, ok := c.DataNodeMap[nodeInfo.Address]
+			if !ok {
+				errorChan <- fmt.Errorf("error getting data node client for node %s", nodeInfo.Address)
+			}
+			c.mu.Unlock()
+			ctx := context.Background()
+			ctxWithTimeout, cancel := context.WithTimeout(ctx, 3*time.Second)
+			defer cancel()
+			stream, err := client.client.ReadFile(ctxWithTimeout, &proto.ReadFileRequest{
+				Hash: hash,
+			})
+			if err != nil {
+				errorChan <- fmt.Errorf("error creating stream: %v", err)
+				return
+			}
+			firstMsg, err := stream.Recv()
+			if err != nil {
+				errorChan <- fmt.Errorf("error receiving first message: %v", err)
+				stream.CloseSend()
+				return
+			}
+
+			if firstMsg.Request.(*proto.ReadFileStream_FileInfo).FileInfo.Hash != hash {
+				errorChan <- fmt.Errorf("error hash mismatch: expected %s got %s", hash, firstMsg.Request.(*proto.ReadFileStream_FileInfo).FileInfo.Hash)
+				stream.CloseSend()
+				return
+			}
+
+			pr, pw := io.Pipe()
+			go func() {
+				defer pw.Close()
+				defer stream.CloseSend()
+				go func() {
+					<-readCtx.Done()
+					stream.CloseSend()
+					pw.CloseWithError(context.Canceled)
+				}()
+				for {
+					resp, err := stream.Recv()
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						log.Printf("error receiving chunk: %v", err)
+						pw.CloseWithError(fmt.Errorf("error receiving chunk: %w", err))
+						return
+					}
+					chunk, ok := resp.Request.(*proto.ReadFileStream_Chunk)
+					if !ok {
+						pw.CloseWithError(fmt.Errorf("expected chunk message"))
+						log.Printf("error: expected chunk message")
+						return
+					}
+					_, err = pw.Write(chunk.Chunk)
+					if err != nil {
+						pw.CloseWithError(fmt.Errorf("error writing to pipe: %w", err))
+						log.Printf("error writing chunk: %v", err)
+						return
+					}
+				}
+			}()
+			readerChan <- pr
+		}(node)
+	}
+	var lastErr error
+	remainingNodes := len(resp.DataNodes)
+
+	for {
+		select {
+		case reader := <-readerChan:
+			// Got a successful reader, cancel other reads and return
+			readCancel()
+			return &reader, nil
+
+		case err := <-errorChan:
+			remainingNodes--
+			lastErr = err
+			if remainingNodes == 0 {
+				// All nodes failed
+				return nil, fmt.Errorf("all nodes failed: %v", lastErr)
+			}
+
+		case <-ctxWithTimeout.Done():
+			return nil, fmt.Errorf("read timeout")
+		}
+	}
+
+}
+
+//TODO: We need to implement the startup blcok report and shit
+// so the name node can build the file map on startup
+// so we can start testing reads
+// Data node startup -> send connection to name node
+// + send heartbeat
+// so we need to write the goroutine that will continuously send out hearbeats + time.sleep()
