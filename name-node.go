@@ -222,7 +222,7 @@ func (node *NameNode) DeleteFile(ctx context.Context, req *proto.DeleteFileReque
 	}
 	node.cmdMu.Lock()
 	defer node.cmdMu.Unlock()
-	for id, _ := range fileEntry.Replicas {
+	for id := range fileEntry.Replicas {
 		if _, exist := node.Commands[id]; !exist {
 			return nil, fmt.Errorf("data node id not recognized: %d", id)
 		}
@@ -237,7 +237,6 @@ func (node *NameNode) DeleteFile(ctx context.Context, req *proto.DeleteFileReque
 	return &proto.DeleteFileResponse{Success: true}, nil
 }
 
-// Consensus things
 func (node *NameNode) BlockReport(ctx context.Context, req *proto.BlockReportRequest) (resp *proto.BlockReportResponse, err error) {
 	// block report
 	node.dnMu.Lock()
