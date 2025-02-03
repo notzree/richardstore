@@ -170,7 +170,7 @@ func (s *Store) Has(key string) bool {
 }
 
 // Read returs and io.Reader with the underlying bytes from the given key.
-func (s *Store) Read(key string) (io.ReadCloser, error) {
+func (s *Store) Read(key string) (*os.File, error) {
 	fileLock := s.getLock(key)
 	defer s.releaseLock(key)
 
@@ -185,7 +185,7 @@ func (s *Store) Read(key string) (io.ReadCloser, error) {
 }
 
 // readStream reads a file from a Hash
-func (s *Store) readStream(key string) (io.ReadCloser, error) {
+func (s *Store) readStream(key string) (*os.File, error) {
 	address, err := s.GetAddress(key)
 	if err != nil {
 		return nil, err
@@ -307,6 +307,28 @@ func (s *Store) Write(r io.Reader) (string, error) {
 // Clear deletes the root and all subdirectories
 func (s *Store) Clear() error {
 	return os.RemoveAll(s.root)
+}
+
+func (s *Store) Stat() ([]*os.File, error) {
+	heldFiles := make([]*os.File, 0)
+	err := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+			heldFiles = append(heldFiles, file)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return heldFiles, nil
 }
 
 type FileAddress struct {

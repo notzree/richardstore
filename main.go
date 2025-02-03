@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"strconv"
 	"time"
 )
@@ -40,7 +39,7 @@ func main() {
 	nameNode.AddDataNodes(peerDataNodes)
 	go nameNode.Run()
 	//todo: remove the storer from the client or decompose storer into hasher + storer
-	client, err := NewClient(":3009", NewStore(StoreOpts{
+	_, err := NewClient(":3009", NewStore(StoreOpts{
 		blockSize: 5,
 		root:      ":3009",
 	}))
@@ -80,14 +79,14 @@ func main() {
 	// 	},
 	// }
 
-	time.Sleep(time.Second * 1)
+	time.Sleep(time.Second * 10)
 	// nameNode.Commands[1] = append(nameNode.Commands[1], mockReplicationCmd)
 	// dataNodes[1].SendHeartbeat()
-	file, err := os.Open("test_file")
-	if err != nil {
-		panic(err)
-	}
-	client._write(file)
-	time.Sleep(time.Second * 100)
+	// file, err := os.Open("test_file")
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// client._write(file)
+	// time.Sleep(time.Second * 100)
 
 }

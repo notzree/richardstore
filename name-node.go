@@ -19,9 +19,13 @@ type FileEntry struct {
 	Replicas        map[uint64]interface{} // set containing list of data node ids that have the file
 }
 
-func NewFileEntry(fi *proto.FileInfo) *FileEntry {
+func NewFileEntry(fi *proto.DataNodeFile) *FileEntry {
 	return &FileEntry{
-		FileInfo: fi,
+		FileInfo: &proto.FileInfo{
+			Hash:            fi.Hash,
+			Size:            fi.Size,
+			GenerationStamp: fi.ModificationStamp,
+		},
 		Replicas: make(map[uint64]interface{}),
 	}
 }

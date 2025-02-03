@@ -18,10 +18,11 @@ message ReplicateFileRequest {
 
 message ReadFileStream {
     oneof request {
-        FileInfo file_info = 1;
+      DataNodeFile file_info = 1;
         bytes chunk = 2;
     }
 }
+
 
 
 message WriteFileRequest {
@@ -95,7 +96,7 @@ message BlockReportRequest {
   uint64 node_id = 1;
 
   // File information
-  repeated FileInfo held_files = 2;
+  repeated DataNodeFile held_files = 2;
 
   // Node status/health
   uint64 capacity = 3;    // In bytes
@@ -106,6 +107,11 @@ message BlockReportRequest {
 
   // Optional optimization fields
   uint64 last_report_id = 8;     // ID of last successful report
+}
+message DataNodeFile {
+  string hash = 1;             // To verify file integrity
+  uint64 size = 2;           // File size in bytes
+  uint64 modification_stamp = 4;
 }
 
 message FileInfo {
@@ -148,7 +154,7 @@ message IncrementalBlockReportRequest {
 
 // updated file
 message FileUpdate {
-  FileInfo file_info = 1;
+  DataNodeFile file_info = 1;
   Update update = 2;
   enum Update {
     UPDATE_UNSPECIFIED = 0;

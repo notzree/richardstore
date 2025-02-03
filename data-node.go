@@ -55,6 +55,7 @@ type DataNode struct {
 	Id      uint64
 	address string
 
+	statMu   *sync.Mutex
 	Capacity uint64
 	Used     uint64
 	Storer   *Store
@@ -68,8 +69,11 @@ type DataNode struct {
 	NameNode PeerNameNode
 	cmdChan  chan *proto.Command // or whatever type you want to send
 
-	HeartbeatInterval   time.Duration
-	BlockReportInterval time.Duration
+	errChan  chan error
+	doneChan chan interface{}
+
+	// InitialHeartbeatInterval   time.Duration
+	// InitialBlockReportInterval time.Duration
 	proto.UnimplementedDataNodeServer
 }
 
@@ -86,6 +90,7 @@ func NewDataNode(Id uint64, address string, storer *Store, maxSimCommands int, c
 		Id:        Id,
 		address:   address,
 		Storer:    storer,
+		statMu:    &sync.Mutex{},
 		Capacity:  nodeCapacity,
 		Used:      0,
 		dnMu:      &sync.RWMutex{},
@@ -93,12 +98,33 @@ func NewDataNode(Id uint64, address string, storer *Store, maxSimCommands int, c
 		clientsMu: &sync.RWMutex{},
 		Clients:   make(map[uint64]*DataNodeClient),
 		cmdChan:   make(chan *proto.Command, maxSimCommands),
+		errChan:   make(chan error, 1),
+		doneChan:  make(chan interface{}),
 	}
 }
+func (node *DataNode) sendError(e error) {
+	node.errChan <- e
+	return
+}
 func (node *DataNode) Run() error {
-	node.InitializeClients()
+	//TODO: need to start a goroutine to process heartbeats + block report
+	//TODO: Need a method to initialize FmpMu from storage
+	// Essentially read all the files and then convert them into a filemap, then sent it in a block report
+	// Nvm this is just the blockreport function
+	if err := node.InitializeClients(); err != nil {
+		return err
+	}
+
 	go node.HandleCommands()
-	return node.StartRPCServer()
+	go node.StartRPCServer()
+	go node.HandleBlockReport()
+	go node.HandleHeartbeat()
+	select {
+	case err := <-node.errChan:
+		// Initiate shutdown
+		close(node.doneChan)
+		return fmt.Errorf("server error: %w", err)
+	}
 }
 
 func (node *DataNode) StartRPCServer() error {
@@ -110,7 +136,12 @@ func (node *DataNode) StartRPCServer() error {
 	server := grpc.NewServer(opts...)
 	proto.RegisterDataNodeServer(server, node)
 	log.Printf("starting data node server on port %s\n", node.address)
-	return server.Serve(ln)
+	go func() {
+		server.Serve(ln)
+	}()
+	<-node.doneChan
+	server.GracefulStop()
+	return nil
 }
 
 // handle replication stream (datanode -> peer datanode)
@@ -234,6 +265,9 @@ func (node *DataNode) WriteFile(stream grpc.ClientStreamingServer[proto.WriteFil
 	}
 
 	log.Printf("wrote file %s to node %d", hash, node.Id)
+	node.statMu.Lock()
+	defer node.statMu.Unlock()
+	node.Used += resp.FileInfo.Size
 	stream.SendAndClose(&proto.WriteFileResponse{
 		Success: true,
 	})
@@ -241,23 +275,55 @@ func (node *DataNode) WriteFile(stream grpc.ClientStreamingServer[proto.WriteFil
 	return nil
 }
 
-func (node *DataNode) ReadFile(req *proto.ReadFileRequest, stream grpc.ServerStreamingServer[proto.ReadFileResponse]) error {
+func (node *DataNode) ReadFile(req *proto.ReadFileRequest, stream grpc.ServerStreamingServer[proto.ReadFileStream]) error {
+	file, err := node.Storer.Read(req.Hash)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	// Send Read File Info as first message
+	err = stream.Send(&proto.ReadFileStream{
+		Request: &proto.ReadFileStream_FileInfo{
+			FileInfo: &proto.DataNodeFile{
+				Hash:              req.Hash,
+				Size:              uint64(fileInfo.Size()),
+				ModificationStamp: uint64(fileInfo.ModTime().Unix()),
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Stream the rest of the data over in a buffer
+	buf := make([]byte, 1024)
+	for {
+		_, err := file.Read(buf)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		err = stream.Send(&proto.ReadFileStream{
+			Request: &proto.ReadFileStream_Chunk{
+				Chunk: buf,
+			},
+		})
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
-// TODO: Read file from Storer
-// Stream chunks back to client
-
-// Optional helper function for handling streaming writes
-// func (node *DataNode) handleFileStream(stream proto.DataNode_WriteFileServer) (*proto.FileInfo, error) {
-// 	// Common streaming logic that could be used by both WriteFile and ReplicateFile
-// 	return nil, fmt.Errorf("not implemented")
-// }
-
-// SendHeartbeat will send a heartbeat to the server,
-// and enque any commands to the data node once it gets a response.
-
-func (node *DataNode) SendHeartbeat() error {
+func (node *DataNode) SendHeartbeat() (time.Duration, error) {
 	c := node.NameNode.client
 	ctx := context.Background()
 	response, err := c.client.Heartbeat(ctx, &proto.HeartbeatRequest{
@@ -266,20 +332,112 @@ func (node *DataNode) SendHeartbeat() error {
 		Used:     node.Used,
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for _, cmd := range response.Commands {
 		node.cmdChan <- cmd
 	}
 
-	node.HeartbeatInterval = time.Duration(response.NextHeartbeatDelay)
-	return nil
+	return time.Duration(response.NextHeartbeatDelay), nil
+}
+func (node *DataNode) HandleHeartbeat() {
+	interval, err := node.SendHeartbeat()
+	if err != nil {
+		node.sendError(err)
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-node.doneChan:
+			return
+		case <-ticker.C:
+			newInterval, err := node.SendHeartbeat()
+			if err != nil {
+				node.sendError(err)
+				return
+			}
+			if newInterval != interval {
+				ticker.Reset(newInterval)
+				interval = newInterval
+			}
+		}
+	}
+}
+
+func (node *DataNode) SendBlockreport() (time.Duration, error) {
+	c := node.NameNode.client
+	ctx := context.Background()
+	rawFiles, err := node.Storer.Stat()
+	if err != nil {
+		return 0, err
+	}
+	heldFiles := make([]*proto.DataNodeFile, len(rawFiles))
+	for i, file := range rawFiles {
+		fileInfo, err := file.Stat()
+		if err != nil {
+			return 0, err
+		}
+		heldFiles[i] = &proto.DataNodeFile{
+			Hash:              fileInfo.Name(),
+			Size:              uint64(fileInfo.Size()),
+			ModificationStamp: uint64(fileInfo.ModTime().Unix()),
+		}
+	}
+
+	response, err := c.client.BlockReport(ctx, &proto.BlockReportRequest{
+		NodeId:       node.Id,
+		Capacity:     node.Capacity,
+		Used:         node.Used,
+		Timestamp:    uint64(time.Now().Unix()),
+		HeldFiles:    heldFiles,
+		LastReportId: 0, // not implemented or used currently
+	})
+	if err != nil {
+		return 0, err
+	}
+	for _, cmd := range response.Commands {
+		node.cmdChan <- cmd
+	}
+	return time.Duration(response.NextReportDelay), nil
+
+}
+
+func (node *DataNode) HandleBlockReport() {
+	interval, err := node.SendBlockreport()
+	if err != nil {
+		node.sendError(err)
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-node.doneChan:
+			return
+		case <-ticker.C:
+			newInterval, err := node.SendBlockreport()
+			if err != nil {
+				node.sendError(err)
+				return
+			}
+			if newInterval != interval {
+				ticker.Reset(newInterval)
+				interval = newInterval
+			}
+		}
+	}
 }
 
 // Handle + process any commands
-func (node *DataNode) HandleCommands() error {
+func (node *DataNode) HandleCommands() {
 	for {
 		select {
+		case <-node.doneChan:
+			return
 		case cmd := <-node.cmdChan:
 			log.Printf("received cmd %v", cmd)
 			switch c := cmd.Command.(type) {
@@ -307,7 +465,10 @@ func (node *DataNode) handleDelete(cmd *proto.DeleteCommand) error {
 		return err
 	}
 	// might want to grab the file size again from the file system rather than trusting cmd
-	node.Used += cmd.FileInfo.Size
+	node.statMu.Lock()
+	defer node.statMu.Unlock()
+	node.Used -= cmd.FileInfo.Size
+
 	return nil
 }
 
