@@ -385,6 +385,7 @@ func (node *DataNode) SendBlockreport() (time.Duration, error) {
 			Size:              uint64(fileInfo.Size()),
 			ModificationStamp: uint64(fileInfo.ModTime().Unix()),
 		}
+		file.Close()
 	}
 
 	response, err := c.client.BlockReport(ctx, &proto.BlockReportRequest{
@@ -408,6 +409,7 @@ func (node *DataNode) SendBlockreport() (time.Duration, error) {
 func (node *DataNode) HandleBlockReport() {
 	interval, err := node.SendBlockreport()
 	if err != nil {
+		log.Printf("err sending block report %s", err)
 		node.sendError(err)
 		return
 	}
@@ -604,8 +606,3 @@ func (node *DataNode) InitializeClients() error {
 	return nil
 
 }
-
-//NEXT STEPS:
-// Finish up 2nd half of replication process
-// Work on writing files
-// write a wrapper to start rpc server, initialize clients, poll commands

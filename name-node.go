@@ -97,12 +97,13 @@ type NameNode struct {
 	proto.UnimplementedNameNodeServer
 }
 
-func NewNameNode(Id uint64, address string, dataNodesSlice []PeerDataNode, hbInterval time.Duration, mxCmd int) *NameNode {
-
+func NewNameNode(Id uint64, address string, dataNodesSlice []PeerDataNode, hbInterval time.Duration, blockReportInterval time.Duration, mxCmd int) *NameNode {
+	initialCommands := make(map[uint64][]*proto.Command)
 	dataNodeMap := make(map[uint64]*PeerDataNode)
 	for _, dn := range dataNodesSlice {
 		dnCopy := dn
 		dataNodeMap[dn.Id] = &dnCopy
+		initialCommands[dn.Id] = make([]*proto.Command, 0)
 	}
 
 	return &NameNode{
@@ -116,10 +117,11 @@ func NewNameNode(Id uint64, address string, dataNodesSlice []PeerDataNode, hbInt
 		DataNodes: dataNodeMap,
 
 		cmdMu:    &sync.Mutex{},
-		Commands: make(map[uint64][]*proto.Command),
+		Commands: initialCommands,
 
-		HeartbeatInterval: hbInterval,
-		MaxSimCommand:     mxCmd,
+		HeartbeatInterval:   hbInterval,
+		BlockReportInterval: blockReportInterval,
+		MaxSimCommand:       mxCmd,
 	}
 }
 
@@ -142,6 +144,7 @@ func (node *NameNode) AddDataNodes(dataNodesSlice []PeerDataNode) {
 	for _, dn := range dataNodesSlice {
 		dnCopy := dn
 		node.DataNodes[dn.Id] = &dnCopy
+		node.Commands[dn.Id] = make([]*proto.Command, 0)
 	}
 }
 
@@ -269,14 +272,14 @@ func (node *NameNode) BlockReport(ctx context.Context, req *proto.BlockReportReq
 	availableCommands, err := node.getCommands(req.NodeId)
 	node.cmdMu.Unlock()
 	if err != nil {
+		return nil, err
 		// try getting commands next iteration
 		// TODO: what happens if this goes on forever???
-		return &proto.BlockReportResponse{
-			NodeId:   node.Id,
-			Commands: nil,
-		}, nil
+		// return &proto.BlockReportResponse{
+		// 	NodeId:   node.Id,
+		// 	Commands: nil,
+		// }, nil
 	}
-
 	return &proto.BlockReportResponse{
 		NodeId:          node.Id,
 		Commands:        availableCommands,

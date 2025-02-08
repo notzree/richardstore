@@ -309,7 +309,15 @@ func (s *Store) Clear() error {
 	return os.RemoveAll(s.root)
 }
 
+// Stat opens (DOES NOT close) and returns a list of os.Files that the storer has stored.
 func (s *Store) Stat() ([]*os.File, error) {
+	if _, err := os.Stat(s.root); err != nil {
+		if os.IsNotExist(err) {
+			return make([]*os.File, 0), nil
+		} else {
+			return nil, err
+		}
+	}
 	heldFiles := make([]*os.File, 0)
 	err := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -320,7 +328,6 @@ func (s *Store) Stat() ([]*os.File, error) {
 			if err != nil {
 				return err
 			}
-			defer file.Close()
 			heldFiles = append(heldFiles, file)
 		}
 		return nil
