@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"bytes"
@@ -18,8 +18,8 @@ import (
 func TestCreateAddressFunc(t *testing.T) {
 	const BLOCKSIZE = 5
 	opts := StoreOpts{
-		blockSize: BLOCKSIZE,
-		root:      "root",
+		BlockSize: BLOCKSIZE,
+		Root:      "root",
 	}
 	s := NewStore(opts)
 	content := "momsbestpicture"
@@ -46,8 +46,8 @@ func TestCreateAddressFunc(t *testing.T) {
 
 func TestStoreSingleAccess(t *testing.T) {
 	opts := StoreOpts{
-		blockSize: 5,
-		root:      "root",
+		BlockSize: 5,
+		Root:      "root",
 	}
 	s := NewStore(opts)
 	defer teardown(t, s)
@@ -89,8 +89,8 @@ func TestStoreConcurrency(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	store := NewStore(StoreOpts{
-		blockSize: 5,
-		root:      tmpDir,
+		BlockSize: 5,
+		Root:      tmpDir,
 	})
 	defer teardown(t, store)
 

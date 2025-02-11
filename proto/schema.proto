@@ -133,9 +133,10 @@ message BlockReportResponse {
 // follower sends to leader
 message HeartbeatRequest {
   uint64 node_id = 1;
+  string address = 2;
   // in bytes
-  uint64 capacity = 2;
-  uint64 used = 3;
+  uint64 capacity = 3;
+  uint64 used = 4;
 }
 
 // leader responds to followers

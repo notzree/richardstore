@@ -1,4 +1,4 @@
-package main
+package hdfs
 
 import (
 	"context"
@@ -280,6 +280,7 @@ func (node *NameNode) BlockReport(ctx context.Context, req *proto.BlockReportReq
 		// 	Commands: nil,
 		// }, nil
 	}
+	fmt.Printf("succesfully received block report from %v", req.NodeId)
 	return &proto.BlockReportResponse{
 		NodeId:          node.Id,
 		Commands:        availableCommands,
@@ -292,10 +293,18 @@ func (node *NameNode) BlockReport(ctx context.Context, req *proto.BlockReportReq
 func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest) (resp *proto.HeartbeatResponse, err error) {
 	node.dnMu.Lock()
 	defer node.dnMu.Unlock()
-	peerDataNode, exist := node.DataNodes[req.NodeId]
-	if !exist {
-		return nil, fmt.Errorf("data node id not recognized: %d", req.NodeId)
+	if _, exist := node.DataNodes[req.NodeId]; !exist {
+		node.DataNodes[req.NodeId] = &PeerDataNode{
+			Id:       req.NodeId,
+			Address:  req.Address, // actually port right now (feb 10th 2025)
+			Alive:    true,
+			LastSeen: time.Now(),
+			Capacity: req.Capacity,
+			Used:     req.Used,
+		}
+		node.Commands[req.NodeId] = make([]*proto.Command, 0)
 	}
+	peerDataNode := node.DataNodes[req.NodeId]
 	peerDataNode.Alive = true
 	peerDataNode.Capacity = req.Capacity
 	peerDataNode.Used = req.Used
@@ -306,7 +315,8 @@ func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest
 	node.cmdMu.Unlock()
 	if err != nil {
 		// try getting commands next iteration
-		// TODO: what happens if this goes on forever???
+		// TODO: what happens if this goes on forever?
+
 		return &proto.HeartbeatResponse{
 			NodeId:             node.Id,
 			NextHeartbeatDelay: uint64(node.HeartbeatInterval),

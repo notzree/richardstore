@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"crypto/sha256"
@@ -17,8 +17,8 @@ import (
 )
 
 type StoreOpts struct {
-	blockSize int
-	root      string
+	BlockSize int
+	Root      string
 }
 
 // concurrent safe struct to read/write bytes to a CAS file system
@@ -34,13 +34,13 @@ type lock struct {
 }
 
 func NewStore(opts StoreOpts) *Store {
-	if opts.root == "" {
+	if opts.Root == "" {
 		// If no root is specified, use the current working directory
 		cwd, err := os.Getwd()
 		if err != nil {
 			panic(err)
 		}
-		opts.root = cwd
+		opts.Root = cwd
 	}
 	return &Store{
 		StoreOpts: opts,
@@ -98,13 +98,13 @@ func (s *Store) CreateAddress(r io.Reader) (FileAddress, error) {
 // GetAddress separates a HashStr into a FileAddress based on blocksize (max size of 1 directory name)
 // and root
 func (s *Store) GetAddress(hashStr string) (FileAddress, error) {
-	directoryDepth := len(hashStr) / s.blockSize
+	directoryDepth := len(hashStr) / s.BlockSize
 	paths := make([]string, directoryDepth)
 	for i := 0; i < directoryDepth; i++ {
-		from, to := i*s.blockSize, (i*s.blockSize)+s.blockSize
+		from, to := i*s.BlockSize, (i*s.BlockSize)+s.BlockSize
 		paths[i] = hashStr[from:to]
 	}
-	nRead := directoryDepth * s.blockSize
+	nRead := directoryDepth * s.BlockSize
 	leftOver := len(hashStr) - nRead
 
 	// TODO: Fix hacky approach currently last directory may be up to 2*blockSize-1 long
@@ -113,7 +113,7 @@ func (s *Store) GetAddress(hashStr string) (FileAddress, error) {
 	}
 
 	joinedPaths := strings.Join(paths, "/")
-	pathStr := filepath.Join(s.root, joinedPaths)
+	pathStr := filepath.Join(s.Root, joinedPaths)
 	return FileAddress{
 		PathName: pathStr,
 		HashStr:  hashStr,
@@ -140,7 +140,7 @@ func (s *Store) Delete(key string) error {
 		return err
 	}
 	// remove empty directories excluding root directory
-	for dir != s.root {
+	for dir != s.Root {
 		err = os.Remove(dir)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -194,10 +194,10 @@ func (s *Store) readStream(key string) (*os.File, error) {
 }
 
 func (s *Store) Write(r io.Reader) (string, error) {
-	if err := os.MkdirAll(s.root, fs.ModePerm); err != nil {
+	if err := os.MkdirAll(s.Root, fs.ModePerm); err != nil {
 		return "", fmt.Errorf("failed to create root directory: %w", err)
 	}
-	tempFile, err := os.CreateTemp(s.root, "temp-*")
+	tempFile, err := os.CreateTemp(s.Root, "temp-*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
@@ -306,12 +306,12 @@ func (s *Store) Write(r io.Reader) (string, error) {
 
 // Clear deletes the root and all subdirectories
 func (s *Store) Clear() error {
-	return os.RemoveAll(s.root)
+	return os.RemoveAll(s.Root)
 }
 
 // Stat opens (DOES NOT close) and returns a list of os.Files that the storer has stored.
 func (s *Store) Stat() ([]*os.File, error) {
-	if _, err := os.Stat(s.root); err != nil {
+	if _, err := os.Stat(s.Root); err != nil {
 		if os.IsNotExist(err) {
 			return make([]*os.File, 0), nil
 		} else {
@@ -319,7 +319,7 @@ func (s *Store) Stat() ([]*os.File, error) {
 		}
 	}
 	heldFiles := make([]*os.File, 0)
-	err := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(s.Root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -350,7 +350,7 @@ func (f *FileAddress) FullPath() string {
 
 func (s *Store) GetAvailableCapacity() uint64 {
 	var stat unix.Statfs_t
-	err := unix.Statfs(s.root, &stat)
+	err := unix.Statfs(s.Root, &stat)
 	if err != nil {
 		log.Printf("Warning: Could not get disk stats: %v", err)
 		return 1 << 40 // 1TB default for now?

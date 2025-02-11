@@ -1,4 +1,4 @@
-package main
+package hdfs
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/notzree/richardstore/proto"
+	str "github.com/notzree/richardstore/store"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -52,13 +53,13 @@ func (dc *DataNodeClient) Close() error {
 }
 
 type DataNode struct {
-	Id      uint64
-	address string
+	Id   uint64
+	port string
 
 	statMu   *sync.Mutex
 	Capacity uint64
 	Used     uint64
-	Storer   *Store
+	Storer   *str.Store
 
 	dnMu      *sync.RWMutex
 	DataNodes map[uint64]*PeerDataNode
@@ -69,15 +70,16 @@ type DataNode struct {
 	NameNode PeerNameNode
 	cmdChan  chan *proto.Command // or whatever type you want to send
 
-	errChan  chan error
-	doneChan chan interface{}
+	errChan     chan error
+	doneChan    chan interface{}
+	MAX_RETRIES int
 
 	// InitialHeartbeatInterval   time.Duration
 	// InitialBlockReportInterval time.Duration
 	proto.UnimplementedDataNodeServer
 }
 
-func NewDataNode(Id uint64, address string, storer *Store, maxSimCommands int, capacity ...uint64) *DataNode {
+func NewDataNode(Id uint64, address string, storer *str.Store, maxSimCommands int, max_retires int, capacity ...uint64) *DataNode {
 	var nodeCapacity uint64
 
 	if len(capacity) > 0 {
@@ -87,30 +89,28 @@ func NewDataNode(Id uint64, address string, storer *Store, maxSimCommands int, c
 	}
 
 	return &DataNode{
-		Id:        Id,
-		address:   address,
-		Storer:    storer,
-		statMu:    &sync.Mutex{},
-		Capacity:  nodeCapacity,
-		Used:      0,
-		dnMu:      &sync.RWMutex{},
-		DataNodes: make(map[uint64]*PeerDataNode),
-		clientsMu: &sync.RWMutex{},
-		Clients:   make(map[uint64]*DataNodeClient),
-		cmdChan:   make(chan *proto.Command, maxSimCommands),
-		errChan:   make(chan error, 1),
-		doneChan:  make(chan interface{}),
+		Id:          Id,
+		port:        address,
+		Storer:      storer,
+		statMu:      &sync.Mutex{},
+		Capacity:    nodeCapacity,
+		Used:        0,
+		dnMu:        &sync.RWMutex{},
+		DataNodes:   make(map[uint64]*PeerDataNode),
+		clientsMu:   &sync.RWMutex{},
+		Clients:     make(map[uint64]*DataNodeClient),
+		cmdChan:     make(chan *proto.Command, maxSimCommands),
+		errChan:     make(chan error, 1),
+		MAX_RETRIES: max_retires,
+		doneChan:    make(chan interface{}),
 	}
 }
 func (node *DataNode) sendError(e error) {
+	log.Printf("err %v", e)
 	node.errChan <- e
 	return
 }
 func (node *DataNode) Run() error {
-	//TODO: need to start a goroutine to process heartbeats + block report
-	//TODO: Need a method to initialize FmpMu from storage
-	// Essentially read all the files and then convert them into a filemap, then sent it in a block report
-	// Nvm this is just the blockreport function
 	if err := node.InitializeClients(); err != nil {
 		return err
 	}
@@ -121,6 +121,7 @@ func (node *DataNode) Run() error {
 	go node.HandleHeartbeat()
 	select {
 	case err := <-node.errChan:
+		log.Printf("err detected!")
 		// Initiate shutdown
 		close(node.doneChan)
 		return fmt.Errorf("server error: %w", err)
@@ -128,14 +129,14 @@ func (node *DataNode) Run() error {
 }
 
 func (node *DataNode) StartRPCServer() error {
-	ln, err := net.Listen("tcp", node.address)
+	ln, err := net.Listen("tcp", node.port)
 	if err != nil {
 		return err
 	}
 	opts := []grpc.ServerOption{}
 	server := grpc.NewServer(opts...)
 	proto.RegisterDataNodeServer(server, node)
-	log.Printf("starting data node server on port %s\n", node.address)
+	log.Printf("starting data node server on port %s\n", node.port)
 	go func() {
 		server.Serve(ln)
 	}()
@@ -330,6 +331,7 @@ func (node *DataNode) SendHeartbeat() (time.Duration, error) {
 		NodeId:   node.Id,
 		Capacity: node.Capacity,
 		Used:     node.Used,
+		Address:  node.port, //TODO: Might need to change this, should be aight thru docker-compose tho
 	})
 	if err != nil {
 		return 0, err
@@ -341,12 +343,14 @@ func (node *DataNode) SendHeartbeat() (time.Duration, error) {
 	return time.Duration(response.NextHeartbeatDelay), nil
 }
 func (node *DataNode) HandleHeartbeat() {
+	// max consecutive retries
+	MAX_RETRIES := node.MAX_RETRIES
 	interval, err := node.SendHeartbeat()
 	if err != nil {
+		log.Printf("err sending heartbeat %s", err)
 		node.sendError(err)
 		return
 	}
-
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -356,9 +360,14 @@ func (node *DataNode) HandleHeartbeat() {
 		case <-ticker.C:
 			newInterval, err := node.SendHeartbeat()
 			if err != nil {
-				node.sendError(err)
-				return
+				log.Println("block report error", err)
+				MAX_RETRIES -= 1
+				if MAX_RETRIES <= 0 {
+					node.sendError(err)
+					return
+				}
 			}
+			MAX_RETRIES += 1 // Reset retry count on successful heartbeat
 			if newInterval != interval {
 				ticker.Reset(newInterval)
 				interval = newInterval
@@ -407,15 +416,22 @@ func (node *DataNode) SendBlockreport() (time.Duration, error) {
 }
 
 func (node *DataNode) HandleBlockReport() {
-	interval, err := node.SendBlockreport()
+	// max consecutive retries
+	MAX_RETRIES := node.MAX_RETRIES
+	interval := 30 * time.Second // Default interval for initial failure case
+
+	// Try first block report
+	newInterval, err := node.SendBlockreport()
 	if err != nil {
-		log.Printf("err sending block report %s", err)
-		node.sendError(err)
-		return
+		log.Printf("err sending initial block report %s", err)
+		MAX_RETRIES -= 1
+	} else {
+		interval = newInterval
 	}
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-node.doneChan:
@@ -423,12 +439,18 @@ func (node *DataNode) HandleBlockReport() {
 		case <-ticker.C:
 			newInterval, err := node.SendBlockreport()
 			if err != nil {
-				node.sendError(err)
-				return
-			}
-			if newInterval != interval {
-				ticker.Reset(newInterval)
-				interval = newInterval
+				log.Println(err)
+				MAX_RETRIES -= 1
+				if MAX_RETRIES <= 0 {
+					node.sendError(err)
+					return
+				}
+			} else {
+				MAX_RETRIES = node.MAX_RETRIES // Reset retry count on success
+				if newInterval != interval {
+					ticker.Reset(newInterval)
+					interval = newInterval
+				}
 			}
 		}
 	}
@@ -562,7 +584,7 @@ func (node *DataNode) CloseAllClients() {
 func (node *DataNode) PeerRepresentation() *PeerDataNode {
 	return &PeerDataNode{
 		Id:       node.Id,
-		Address:  node.address,
+		Address:  node.port,
 		Alive:    true,
 		LastSeen: time.Now(),
 		// in bytes

@@ -1,14 +1,26 @@
-.PHONY: build run test
+.PHONY: build run test proto build-namenode build-datanode run-namenode run-datanode
 .PHONY: proto
 
-build:
-	@go build -v -o $$(pwd)/bin/rs
+# Binary output paths
+NAMENODE_BIN = $$(pwd)/bin/namenode
+DATANODE_BIN = $$(pwd)/bin/datanode
 
-run: build
-	@$$(pwd)/bin/rs
+build: build-namenode build-datanode
+
+build-namenode:
+	@go build -v -o $(NAMENODE_BIN) ./cmd/namenode
+
+build-datanode:
+	@go build -v -o $(DATANODE_BIN) ./cmd/datanode
+
+run-namenode: build-namenode
+	@$(NAMENODE_BIN)
+
+run-datanode: build-datanode
+	@$(DATANODE_BIN)
 
 test:
-	go test ./... 
+	go test ./...
 
 proto:
 	protoc --go_out=. --go_opt=paths=source_relative \

@@ -6,16 +6,6 @@ import (
 )
 
 func main() {
-	// dp := NewDataPlane(":4000")
-	// go dp.Listen()
-	// time.Sleep(500 * time.Millisecond)
-	// ds := NewDataSender()
-	// data := "momsbestpicture"
-	// buf := bytes.NewBuffer([]byte(data))
-	// err := ds.Send(io.NopCloser(buf), "http://localhost:4000/p2p/transfer")
-	// if err != nil {
-	// 	fmt.Println(err)
-	// }
 	MAXSIMCOMMANDS := 5
 	NUMNODES := 5
 	const (
@@ -23,7 +13,11 @@ func main() {
 		MB          = 1024 * KB
 		sizeInBytes = 50 * MB
 	)
-	nameNode := NewNameNode(0, ":3009", nil, 3*time.Second, MAXSIMCOMMANDS)
+
+	// TODO: Need to make Name node accept data nodes from heartbeat.
+	// Datanodes however still need to know of each other from startup.
+
+	nameNode := NewNameNode(0, ":3009", nil, 2*time.Second, 30*time.Second, MAXSIMCOMMANDS)
 	dataNodes := make([]DataNode, NUMNODES+1)
 	peerDataNodes := make([]PeerDataNode, NUMNODES+1)
 	for i := 1; i < (NUMNODES + 1); i++ {
@@ -32,13 +26,13 @@ func main() {
 			blockSize: 5,
 			root:      address,
 		}
-		dataNodes[i] = *NewDataNode(uint64(i), address, NewStore(storeOpts), MAXSIMCOMMANDS, 50*MB)
+		dataNodes[i] = *NewDataNode(uint64(i), address, NewStore(storeOpts), MAXSIMCOMMANDS, 5, 50*MB)
 		peerDataNodes[i] = *dataNodes[i].PeerRepresentation()
 	}
 
-	nameNode.AddDataNodes(peerDataNodes)
+	// nameNode.AddDataNodes(peerDataNodes)
 	go nameNode.Run()
-	//todo: remove the storer from the client or decompose storer into hasher + storer
+
 	_, err := NewClient(":3009", NewStore(StoreOpts{
 		blockSize: 5,
 		root:      ":3009",

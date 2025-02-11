@@ -1,4 +1,4 @@
-package main
+package hdfs
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/notzree/richardstore/proto"
+	str "github.com/notzree/richardstore/store"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -18,10 +19,10 @@ type Client struct {
 	NameNodeClient *NameNodeClient
 	mu             *sync.RWMutex
 	DataNodeMap    map[string]*DataNodeClient
-	storer         *Store
+	storer         *str.Store
 }
 
-func NewClient(nameNodeAddr string, storer *Store) (*Client, error) {
+func NewClient(nameNodeAddr string, storer *str.Store) (*Client, error) {
 	nameNodeClient, err := NewNameNodeClient(nameNodeAddr)
 	if err != nil {
 		return nil, err
@@ -87,7 +88,7 @@ func (c *Client) _write(file *os.File) (string, error) {
 		Size:                 size,
 		MinReplicationFactor: 0.5,
 	})
-	log.Printf("data nodes: %s", resp.DataNodes)
+
 	if err != nil {
 		return "", err
 	}
@@ -301,10 +302,3 @@ func (c *Client) _read(hash string) (*io.ReadCloser, error) {
 	}
 
 }
-
-//TODO: We need to implement the startup blcok report and shit
-// so the name node can build the file map on startup
-// so we can start testing reads
-// Data node startup -> send connection to name node
-// + send heartbeat
-// so we need to write the goroutine that will continuously send out hearbeats + time.sleep()
