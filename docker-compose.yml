@@ -1,0 +1,26 @@
+services:
+  namenode:
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: cmd/namenode/Dockerfile
+    environment:
+      - NAMENODE_PORT=3009
+    ports:
+      - "3009:3009"
+
+  datanode:
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: cmd/datanode/Dockerfile
+    environment:
+      - REPLICA_NUMBER=${COMPOSE_SERVICE_REPLICA_NUMBER:-0}
+      - TOTAL_REPLICAS=1
+      - NAMENODE_ADDRESS=namenode:3009 # Using docker compose DNS
+    deploy:
+      replicas: 1
+    ports:
+      - "3000-3002:3000-3002" # Map port range for all replicas
+    depends_on:
+      - namenode

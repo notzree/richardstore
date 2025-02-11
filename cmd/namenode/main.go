@@ -1,4 +1,4 @@
-package namenode
+package main
 
 import (
 	"log"
@@ -9,6 +9,6 @@ import (
 
 func main() {
 	MAXSIMCOMMANDS := 5
-	nameNode := hdfs.NewNameNode(0, ":3009", nil, 2*time.Second, 30*time.Second, MAXSIMCOMMANDS)
+	nameNode := hdfs.NewNameNode(9, ":3009", nil, 2*time.Second, 30*time.Second, MAXSIMCOMMANDS)
 	log.Fatal(nameNode.Run())
 }

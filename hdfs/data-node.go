@@ -325,7 +325,7 @@ func (node *DataNode) ReadFile(req *proto.ReadFileRequest, stream grpc.ServerStr
 }
 
 func (node *DataNode) SendHeartbeat() (time.Duration, error) {
-	c := node.NameNode.client
+	c := node.NameNode.Client
 	ctx := context.Background()
 	response, err := c.client.Heartbeat(ctx, &proto.HeartbeatRequest{
 		NodeId:   node.Id,
@@ -377,7 +377,7 @@ func (node *DataNode) HandleHeartbeat() {
 }
 
 func (node *DataNode) SendBlockreport() (time.Duration, error) {
-	c := node.NameNode.client
+	c := node.NameNode.Client
 	ctx := context.Background()
 	rawFiles, err := node.Storer.Stat()
 	if err != nil {
@@ -607,16 +607,19 @@ func (node *DataNode) InitializeClients() error {
 	node.clientsMu.Lock()
 	defer node.clientsMu.Unlock()
 	// Create name node connection
-	if node.NameNode.client == nil {
-		c, err := NewNameNodeClient(node.NameNode.address)
+	if node.NameNode.Client == nil {
+		c, err := NewNameNodeClient(node.NameNode.Address)
 		if err != nil {
 			return err
 		}
-		node.NameNode.client = c
+		node.NameNode.Client = c
 	}
 
 	// Connect w/ peers
 	for id, peer := range node.DataNodes {
+		if peer == nil {
+			continue
+		}
 		c, err := NewDataNodeClient(peer.Address)
 		if err != nil {
 			return err
@@ -624,7 +627,7 @@ func (node *DataNode) InitializeClients() error {
 		// log.Printf("%d connected to node %d\n", node.Id, peer.Id)
 		node.Clients[id] = c
 	}
-	log.Printf("%d connected to %d other peer nodes", node.Id, len(node.DataNodes))
+	log.Printf("node id: %d connected to %d other peer nodes", node.Id, len(node.DataNodes))
 	return nil
 
 }

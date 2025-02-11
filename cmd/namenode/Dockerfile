@@ -1,13 +1,11 @@
-# Base image
+# Dockerfile.namenode
 FROM golang:1.23
-
-# Set working directory
 WORKDIR /app
-
-COPY go.mod go.sum Makefile ./
-
-# Copy the rest of the application code
 COPY . .
+# Build the binary directly to /app/bin
+RUN mkdir -p /app/bin && \
+    go build -v -o /app/bin/namenode ./cmd/namenode && \
+    chmod +x /app/bin/namenode
 
-# Run the application using make run
-CMD ["make", "run-namenode"]
+
+CMD ["/app/bin/namenode"]

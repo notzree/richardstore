@@ -1,13 +1,9 @@
-# Base image
+# Dockerfile.datanode
 FROM golang:1.23
-
-# Set working directory
 WORKDIR /app
-
-COPY go.mod go.sum Makefile ./
-
-# Copy the rest of the application code
 COPY . .
-
-# Run the application using make run
-CMD ["make", "run-datanode"]
+# Build the binary directly to /app/bin
+RUN mkdir -p /app/bin && \
+    go build -v -o /app/bin/datanode ./cmd/datanode && \
+    chmod +x /app/bin/datanode
+CMD ["/app/bin/datanode"]

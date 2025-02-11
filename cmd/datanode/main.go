@@ -1,4 +1,4 @@
-package namenode
+package main
 
 import (
 	"fmt"
@@ -28,6 +28,10 @@ func main() {
 	if totalReplicas == "" {
 		totalReplicas = "1"
 	}
+	nameNodeAddr := os.Getenv("NAMENODE_ADDRESS")
+	if nameNodeAddr == "" {
+		nameNodeAddr = ":3009"
+	}
 
 	// Convert to int and calculate port
 	offset, err := strconv.Atoi(replicaNum)
@@ -45,14 +49,14 @@ func main() {
 		BlockSize: 5,
 		Root:      ":" + port,
 	}), MAXSIMCOMMANDS, 5, 0)
-	PeerNodes := make([]hdfs.PeerDataNode, total+1)
-	for i := 1; i < (total + 1); i++ {
+	PeerNodes := make([]hdfs.PeerDataNode, total)
+	for i := 0; i < (total); i++ {
 		if i == offset {
 			continue
 		}
 		address := ":" + strconv.Itoa(basePort+i)
 		PeerNodes[i] = hdfs.PeerDataNode{
-			Id:       uint64(i),
+			Id:       uint64(i + 1),
 			Address:  address,
 			Alive:    true,
 			Capacity: 0,
@@ -60,6 +64,11 @@ func main() {
 		}
 	}
 	datanode.AddDataNodes(PeerNodes)
+	datanode.NameNode = hdfs.PeerNameNode{
+		Id:      9,
+		Address: nameNodeAddr,
+		Client:  nil,
+	}
 
 	log.Fatal(datanode.Run())
 }

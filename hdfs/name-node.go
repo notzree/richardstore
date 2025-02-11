@@ -42,8 +42,8 @@ const (
 // Peer node view of NameNode
 type PeerNameNode struct {
 	Id      uint64
-	address string
-	client  *NameNodeClient
+	Address string
+	Client  *NameNodeClient
 }
 
 type NameNodeClient struct {
@@ -132,8 +132,8 @@ func (node *NameNode) PeerRepresentation() *PeerNameNode {
 	// }
 	return &PeerNameNode{
 		Id:      node.Id,
-		address: node.address,
-		client:  nil,
+		Address: node.address,
+		Client:  nil,
 	}
 }
 

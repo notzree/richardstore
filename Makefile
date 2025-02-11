@@ -14,9 +14,11 @@ build-datanode:
 	@go build -v -o $(DATANODE_BIN) ./cmd/datanode
 
 run-namenode: build-namenode
+	@chmod +x $(NAMENODE_BIN)
 	@$(NAMENODE_BIN)
 
 run-datanode: build-datanode
+	@chmod +x $(DATANODE_BIN)
 	@$(DATANODE_BIN)
 
 test:
