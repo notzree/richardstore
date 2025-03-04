@@ -105,7 +105,7 @@ func (c *Client) _write(file *os.File) (string, error) {
 
 	resultCh := make(chan writeResult, len(resp.DataNodes))
 	var wg sync.WaitGroup
-
+	log.Printf("writing to %v", resp.DataNodes)
 	for i, targetNode := range resp.DataNodes {
 		wg.Add(1)
 		go func(idx int, addr string) {

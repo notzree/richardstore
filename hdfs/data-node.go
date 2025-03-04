@@ -15,7 +15,6 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// peer nodes view of the data node
 type PeerDataNode struct {
 	Id       uint64
 	Address  string
@@ -52,42 +51,46 @@ func (dc *DataNodeClient) Close() error {
 	return nil
 }
 
+type DataNodeState int
+
+const (
+	SafeMode DataNodeState = iota
+	Active
+)
+
 type DataNode struct {
-	Id   uint64
-	port string
+	Id          uint64
+	port        string
+	MAX_RETRIES int
+
+	state   DataNodeState
+	stateMu *sync.RWMutex
 
 	statMu   *sync.Mutex
 	Capacity uint64
 	Used     uint64
 	Storer   *str.Store
 
-	dnMu      *sync.RWMutex
-	DataNodes map[uint64]*PeerDataNode
-
-	clientsMu *sync.RWMutex
-	Clients   map[uint64]*DataNodeClient
-
 	NameNode PeerNameNode
-	cmdChan  chan *proto.Command // or whatever type you want to send
 
-	errChan     chan error
-	doneChan    chan interface{}
-	MAX_RETRIES int
+	cmdChan  chan *proto.Command // or whatever type you want to send
+	errChan  chan error
+	doneChan chan interface{}
 
 	// InitialHeartbeatInterval   time.Duration
 	// InitialBlockReportInterval time.Duration
 	proto.UnimplementedDataNodeServer
 }
 
-func NewDataNode(Id uint64, address string, storer *str.Store, maxSimCommands int, max_retires int, capacity ...uint64) *DataNode {
+func NewDataNode(Id uint64, address string, storer *str.Store, maxSimCommands int, max_retires int, capacity *uint64) *DataNode {
 	var nodeCapacity uint64
 
-	if len(capacity) > 0 {
-		nodeCapacity = capacity[0]
+	if capacity != nil {
+		nodeCapacity = *capacity
 	} else {
 		nodeCapacity = storer.GetAvailableCapacity()
 	}
-
+	log.Printf("INITIALIZING NODE WITH %v CAPACITY", nodeCapacity)
 	return &DataNode{
 		Id:          Id,
 		port:        address,
@@ -95,30 +98,34 @@ func NewDataNode(Id uint64, address string, storer *str.Store, maxSimCommands in
 		statMu:      &sync.Mutex{},
 		Capacity:    nodeCapacity,
 		Used:        0,
-		dnMu:        &sync.RWMutex{},
-		DataNodes:   make(map[uint64]*PeerDataNode),
-		clientsMu:   &sync.RWMutex{},
-		Clients:     make(map[uint64]*DataNodeClient),
 		cmdChan:     make(chan *proto.Command, maxSimCommands),
 		errChan:     make(chan error, 1),
 		MAX_RETRIES: max_retires,
 		doneChan:    make(chan interface{}),
+		state:       SafeMode,
+		stateMu:     &sync.RWMutex{},
 	}
 }
 func (node *DataNode) sendError(e error) {
 	log.Printf("err %v", e)
 	node.errChan <- e
-	return
 }
 func (node *DataNode) Run() error {
 	if err := node.InitializeClients(); err != nil {
 		return err
 	}
-
-	go node.HandleCommands()
-	go node.StartRPCServer()
-	go node.HandleBlockReport()
 	go node.HandleHeartbeat()
+	for {
+		node.stateMu.RLock()
+		if node.state == Active {
+			break
+		}
+		node.stateMu.RUnlock()
+		time.Sleep(1 * time.Second)
+	}
+	go node.StartRPCServer()
+	go node.HandleCommands()
+	go node.HandleBlockReport()
 	select {
 	case err := <-node.errChan:
 		log.Printf("err detected!")
@@ -351,6 +358,9 @@ func (node *DataNode) HandleHeartbeat() {
 		node.sendError(err)
 		return
 	}
+	node.stateMu.Lock()
+	node.state = Active
+	node.stateMu.Unlock()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -360,7 +370,7 @@ func (node *DataNode) HandleHeartbeat() {
 		case <-ticker.C:
 			newInterval, err := node.SendHeartbeat()
 			if err != nil {
-				log.Println("block report error", err)
+				log.Println("hearbeat error", err)
 				MAX_RETRIES -= 1
 				if MAX_RETRIES <= 0 {
 					node.sendError(err)
@@ -501,13 +511,12 @@ func (node *DataNode) handleReplication(cmd *proto.ReplicateCommand) error {
 		return fmt.Errorf("node %d missing file hash %s", node.Id, cmd.FileInfo.Hash)
 	}
 
-	// Get the file reader
 	fr, err := node.Storer.Read(cmd.FileInfo.Hash)
 	if err != nil {
 		return err
 	}
 	defer fr.Close()
-	log.Printf("remaining targets %d", len(cmd.TargetNodes))
+
 	// Might not need this here tbh
 	if len(cmd.TargetNodes) == 0 {
 		log.Printf("end of replication chain reached with node %d", node.Id)
@@ -515,11 +524,14 @@ func (node *DataNode) handleReplication(cmd *proto.ReplicateCommand) error {
 	}
 	target := cmd.TargetNodes[0]
 	remaining := cmd.TargetNodes[1:]
-	node.clientsMu.Lock()
-	defer node.clientsMu.Unlock()
 
 	ctx := context.Background()
-	stream, err := node.Clients[target].client.ReplicateFile(ctx)
+	peerNode, err := NewDataNodeClient(target.Address)
+	defer peerNode.Close()
+	if err != nil {
+		return err
+	}
+	stream, err := peerNode.client.ReplicateFile(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create stream: %w", err)
 	}
@@ -571,14 +583,16 @@ func (node *DataNode) handleReplication(cmd *proto.ReplicateCommand) error {
 	return nil
 }
 
-func (node *DataNode) CloseAllClients() {
-	node.clientsMu.Lock()
-	defer node.clientsMu.Unlock()
-
-	for _, client := range node.Clients {
-		client.Close()
+func (node *DataNode) InitializeClients() error {
+	// Create name node connection
+	if node.NameNode.Client == nil {
+		c, err := NewNameNodeClient(node.NameNode.Address)
+		if err != nil {
+			return err
+		}
+		node.NameNode.Client = c
 	}
-	node.Clients = make(map[uint64]*DataNodeClient)
+	return nil
 }
 
 func (node *DataNode) PeerRepresentation() *PeerDataNode {
@@ -591,43 +605,4 @@ func (node *DataNode) PeerRepresentation() *PeerDataNode {
 		Capacity: node.Capacity,
 		Used:     node.Used,
 	}
-}
-
-func (node *DataNode) AddDataNodes(dataNodesSlice []PeerDataNode) {
-	node.dnMu.Lock()
-	defer node.dnMu.Unlock()
-
-	for _, dn := range dataNodesSlice {
-		dnCopy := dn
-		node.DataNodes[dn.Id] = &dnCopy
-	}
-}
-
-func (node *DataNode) InitializeClients() error {
-	node.clientsMu.Lock()
-	defer node.clientsMu.Unlock()
-	// Create name node connection
-	if node.NameNode.Client == nil {
-		c, err := NewNameNodeClient(node.NameNode.Address)
-		if err != nil {
-			return err
-		}
-		node.NameNode.Client = c
-	}
-
-	// Connect w/ peers
-	for id, peer := range node.DataNodes {
-		if peer == nil {
-			continue
-		}
-		c, err := NewDataNodeClient(peer.Address)
-		if err != nil {
-			return err
-		}
-		// log.Printf("%d connected to node %d\n", node.Id, peer.Id)
-		node.Clients[id] = c
-	}
-	log.Printf("node id: %d connected to %d other peer nodes", node.Id, len(node.DataNodes))
-	return nil
-
 }

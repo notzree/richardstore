@@ -42,6 +42,12 @@ func NewStore(opts StoreOpts) *Store {
 		}
 		opts.Root = cwd
 	}
+
+	// Create the root directory if it doesn't exist
+	if err := os.MkdirAll(opts.Root, 0755); err != nil {
+		panic(fmt.Errorf("failed to create root directory: %w", err))
+	}
+
 	return &Store{
 		StoreOpts: opts,
 		locks:     make(map[string]*lock),
@@ -355,5 +361,6 @@ func (s *Store) GetAvailableCapacity() uint64 {
 		log.Printf("Warning: Could not get disk stats: %v", err)
 		return 1 << 40 // 1TB default for now?
 	}
+	log.Printf("Bavail: %v, Bsize: %v", stat.Bavail, stat.Bsize)
 	return stat.Bavail * uint64(stat.Bsize)
 }

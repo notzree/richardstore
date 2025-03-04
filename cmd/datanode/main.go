@@ -21,9 +21,11 @@ func main() {
 
 	// Get replica number from environment
 	replicaNum := os.Getenv("REPLICA_NUMBER")
+	fmt.Println(replicaNum)
 	if replicaNum == "" {
 		replicaNum = "0"
 	}
+	fmt.Println(replicaNum)
 	totalReplicas := os.Getenv("TOTAL_REPLICAS")
 	if totalReplicas == "" {
 		totalReplicas = "1"
@@ -40,7 +42,6 @@ func main() {
 	}
 	port := fmt.Sprintf("%d", basePort+offset)
 
-	total, err := strconv.Atoi(totalReplicas)
 	if err != nil {
 		log.Fatalf("Invalid total replicas: %v", err)
 	}
@@ -48,22 +49,7 @@ func main() {
 	datanode := hdfs.NewDataNode(uint64(offset), ":"+port, s.NewStore(s.StoreOpts{
 		BlockSize: 5,
 		Root:      ":" + port,
-	}), MAXSIMCOMMANDS, 5, 0)
-	PeerNodes := make([]hdfs.PeerDataNode, total)
-	for i := 0; i < (total); i++ {
-		if i == offset {
-			continue
-		}
-		address := ":" + strconv.Itoa(basePort+i)
-		PeerNodes[i] = hdfs.PeerDataNode{
-			Id:       uint64(i + 1),
-			Address:  address,
-			Alive:    true,
-			Capacity: 0,
-			Used:     0,
-		}
-	}
-	datanode.AddDataNodes(PeerNodes)
+	}), MAXSIMCOMMANDS, 5, nil)
 	datanode.NameNode = hdfs.PeerNameNode{
 		Id:      9,
 		Address: nameNodeAddr,

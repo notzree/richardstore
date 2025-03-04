@@ -9,6 +9,6 @@ import (
 
 func main() {
 	MAXSIMCOMMANDS := 5
-	nameNode := hdfs.NewNameNode(9, ":3009", nil, 2*time.Second, 30*time.Second, MAXSIMCOMMANDS)
-	log.Fatal(nameNode.Run())
+	namenode := hdfs.NewNameNode(uint64(0), ":3009", 5*time.Second, 1*time.Minute, MAXSIMCOMMANDS)
+	log.Fatal(namenode.Run())
 }

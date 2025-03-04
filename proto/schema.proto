@@ -70,7 +70,9 @@ message CreateFileResponse {
   repeated DataNodeInfo data_nodes = 1;
 }
 message DataNodeInfo {
-  string address = 1; // incl port
+  uint64 Id = 1;
+  string address = 2; // incl port
+
 }
 
 message ReadFileRequest {
@@ -177,7 +179,7 @@ message DeleteCommand{
 
 message ReplicateCommand {
   FileInfo file_info = 1;
-  repeated uint64 target_nodes = 2;  // Where to replicate to
+  repeated DataNodeInfo target_nodes = 2;  // Where to replicate to
   float current_replication_factor = 3;
 }
 

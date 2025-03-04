@@ -53,7 +53,6 @@ type NameNodeClient struct {
 
 func NewNameNodeClient(address string) (*NameNodeClient, error) {
 	log.Printf("Attempting to connect to namenode at %s", address)
-
 	// Force the connection attempt to be blocking so we can see what's happening
 	conn, err := grpc.NewClient(
 		address,
@@ -97,14 +96,14 @@ type NameNode struct {
 	proto.UnimplementedNameNodeServer
 }
 
-func NewNameNode(Id uint64, address string, dataNodesSlice []PeerDataNode, hbInterval time.Duration, blockReportInterval time.Duration, mxCmd int) *NameNode {
+func NewNameNode(Id uint64, address string, hbInterval time.Duration, blockReportInterval time.Duration, mxCmd int) *NameNode {
 	initialCommands := make(map[uint64][]*proto.Command)
 	dataNodeMap := make(map[uint64]*PeerDataNode)
-	for _, dn := range dataNodesSlice {
-		dnCopy := dn
-		dataNodeMap[dn.Id] = &dnCopy
-		initialCommands[dn.Id] = make([]*proto.Command, 0)
-	}
+	// for _, dn := range dataNodesSlice {
+	// 	dnCopy := dn
+	// 	dataNodeMap[dn.Id] = &dnCopy
+	// 	initialCommands[dn.Id] = make([]*proto.Command, 0)
+	// }
 
 	return &NameNode{
 		Id:      Id,
@@ -173,14 +172,18 @@ func (node *NameNode) CreateFile(ctx context.Context, req *proto.CreateFileReque
 	numRequiredNodes := int(int(req.MinReplicationFactor) * len(node.DataNodes))
 	// in the future I would make this a heap thing
 	for _, dataNode := range node.DataNodes {
+		log.Println(dataNode)
+		log.Printf("need %v", req.Size)
 		if !dataNode.Alive || (dataNode.Capacity-dataNode.Used) < req.Size {
 			continue
 		}
+
 		nodes = append(nodes, &proto.DataNodeInfo{Address: dataNode.Address})
 		if len(nodes) >= numRequiredNodes {
 			break
 		}
 	}
+	log.Printf("telling client to write to %v nodes", len(nodes))
 	if len(nodes) < numRequiredNodes {
 		return nil, fmt.Errorf("insufficient available datanodes for replication factor %.0f: need %d, found %d",
 			req.MinReplicationFactor, numRequiredNodes, len(nodes))
@@ -201,7 +204,7 @@ func (node *NameNode) ReadFile(ctx context.Context, req *proto.ReadFileRequest) 
 		// do we return empty or throw error!?
 		return &proto.ReadFileResponse{DataNodes: availableNodes, Size: 0}, nil
 	}
-	for id, _ := range fileEntry.Replicas {
+	for id := range fileEntry.Replicas {
 		dn, exist := node.DataNodes[id]
 		if !exist {
 			return nil, fmt.Errorf("data node id not recognized: %d", id)
@@ -304,6 +307,7 @@ func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest
 		}
 		node.Commands[req.NodeId] = make([]*proto.Command, 0)
 	}
+	log.Printf("received heartbeat from %v", req.NodeId)
 	peerDataNode := node.DataNodes[req.NodeId]
 	peerDataNode.Alive = true
 	peerDataNode.Capacity = req.Capacity
