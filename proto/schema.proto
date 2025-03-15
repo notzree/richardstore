@@ -4,45 +4,31 @@ option go_package = "github.com/notzree/richardstore/proto";
 import "google/protobuf/empty.proto";
 
 service DataNode{
-  rpc ReplicateFile(stream ReplicateFileRequest) returns (CommandResponse);
-  rpc WriteFile(stream WriteFileRequest) returns (WriteFileResponse);
-  rpc ReadFile(ReadFileRequest) returns (stream ReadFileStream);
+  rpc WriteFile(stream FileStream) returns (WriteFileResponse);
+  rpc ReadFile(ReadFileRequest) returns (stream FileStream);
 }
 
-message ReplicateFileRequest {
-  oneof request {
-    ReplicateCommand command = 1;
-    bytes chunk = 2;
-  }
-}
-
-message ReadFileStream {
-    oneof request {
-      DataNodeFile file_info = 1;
+message FileStream {
+    oneof type {
+        StreamInfo stream_info = 1;
         bytes chunk = 2;
     }
 }
 
-
-
-message WriteFileRequest {
-  oneof request {
-    FileInfo file_info = 1;
-    bytes chunk = 2;
-  }
+message StreamInfo {
+    FileInfo file_info =1;
+    repeated DataNodeInfo data_nodes = 2;
 }
+
+
 
 message WriteFileResponse {
   bool success = 1;
 }
 
-message CommandResponse {
-  bool success = 1;
-}
-
 
 service NameNode {
-  rpc CreateFile (CreateFileRequest) returns (CreateFileResponse);
+  rpc WriteFile (WriteFileRequest) returns (CreateFileResponse);
   rpc ReadFile (ReadFileRequest) returns (ReadFileResponse);
   rpc DeleteFile (DeleteFileRequest) returns (DeleteFileResponse);
   rpc Info(google.protobuf.Empty) returns (NameNodeInfo);
@@ -61,9 +47,8 @@ message NameNodeInfo {
 }
 
 
-message CreateFileRequest {
-  float min_replication_factor = 1;
-  uint64 size = 2;
+message WriteFileRequest {
+  FileInfo file_info = 1;
 }
 
 message CreateFileResponse {
@@ -72,7 +57,6 @@ message CreateFileResponse {
 message DataNodeInfo {
   uint64 Id = 1;
   string address = 2; // incl port
-
 }
 
 message ReadFileRequest {
@@ -98,7 +82,7 @@ message BlockReportRequest {
   uint64 node_id = 1;
 
   // File information
-  repeated DataNodeFile held_files = 2;
+  repeated FileInfo held_files = 2;
 
   // Node status/health
   uint64 capacity = 3;    // In bytes
@@ -110,23 +94,18 @@ message BlockReportRequest {
   // Optional optimization fields
   uint64 last_report_id = 8;     // ID of last successful report
 }
-message DataNodeFile {
-  string hash = 1;             // To verify file integrity
-  uint64 size = 2;           // File size in bytes
-  uint64 modification_stamp = 4;
-}
+
 
 message FileInfo {
   string hash = 1;             // To verify file integrity
   uint64 size = 2;           // File size in bytes
   float min_replication_factor = 3;
-  uint64 generation_stamp = 4;
+  uint64 modification_stamp = 4;
 }
 
 // Leader responds to follower
 message BlockReportResponse {
   uint64 node_id =1;
-  repeated Command commands = 2;
   uint64 next_report_delay = 3;  // Suggested delay before next report
   uint64 report_id = 4;          // ID for this report
 }
@@ -156,8 +135,9 @@ message IncrementalBlockReportRequest {
 
 
 // updated file
+// this pattern is lowky gross lol
 message FileUpdate {
-  DataNodeFile file_info = 1;
+  FileInfo file_info = 1;
   Update update = 2;
   enum Update {
     UPDATE_UNSPECIFIED = 0;
