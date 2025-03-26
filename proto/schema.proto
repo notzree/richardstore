@@ -101,6 +101,7 @@ message FileInfo {
   uint64 size = 2;           // File size in bytes
   float min_replication_factor = 3;
   uint64 modification_stamp = 4;
+  uint64 generation_stamp = 5; // when the file was created
 }
 
 // Leader responds to follower
