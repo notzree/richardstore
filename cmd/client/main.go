@@ -106,11 +106,11 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, fmt.Sprintf("Failed to read file: %v", err), http.StatusInternalServerError)
 		return
 	}
-	defer (*reader).Close()
+	defer (reader).Close()
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", hash))
-	_, err = io.Copy(w, *reader)
+	_, err = io.Copy(w, reader)
 	if err != nil {
 		log.Printf("Error copying file to response: %v", err)
 		// Note: Can't write error response here as we've already started writing the response

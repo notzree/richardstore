@@ -55,7 +55,7 @@ type writeResult struct {
 func (c *Client) WriteFile(file *os.File, minRepFactor float32) (string, error) {
 	return c.write(file, minRepFactor)
 }
-func (c *Client) ReadFile(hash string) (*io.ReadCloser, error) {
+func (c *Client) ReadFile(hash string) (io.ReadCloser, error) {
 	return c.read(hash)
 }
 
@@ -125,7 +125,7 @@ func (c *Client) write(file *os.File, minRepFactor float32) (string, error) {
 	return fileInfo.Hash, nil
 }
 
-func (c *Client) read(hash string) (*io.ReadCloser, error) {
+func (c *Client) read(hash string) (io.ReadCloser, error) {
 	ctx := context.Background()
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -220,7 +220,7 @@ func (c *Client) read(hash string) (*io.ReadCloser, error) {
 
 		// Successfully set up reader with this datanode
 		reader := io.ReadCloser(pr)
-		return &reader, nil
+		return reader, nil
 	}
 
 	// If we get here, all datanodes failed
