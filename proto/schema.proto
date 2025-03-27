@@ -136,7 +136,7 @@ message IncrementalBlockReportRequest {
 
 
 // updated file
-// this pattern is lowky gross lol
+// this pattern is suboptimal and could be improved
 message FileUpdate {
   FileInfo file_info = 1;
   Update update = 2;
