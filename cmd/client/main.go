@@ -76,7 +76,7 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write the file to HDFS
-	hash, err := s.client.WriteFile(tempFile)
+	hash, err := s.client.WriteFile(tempFile, 0.7)
 	if err != nil {
 		writeError(w, fmt.Sprintf("Failed to write file: %v", err), http.StatusInternalServerError)
 		return
@@ -85,7 +85,6 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	response := UploadResponse{
 		Hash: hash,
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -111,12 +110,28 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", hash))
-
 	_, err = io.Copy(w, *reader)
 	if err != nil {
 		log.Printf("Error copying file to response: %v", err)
 		// Note: Can't write error response here as we've already started writing the response
 	}
+}
+
+func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// In a real implementation, you'd fetch this from your namenode
+	info := map[string]interface{}{
+		"service":  "Distributed File System",
+		"status":   "running",
+		"namenode": "s.client.GetNameNodeAddress()", //TODO: implement this later?
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
 }
 
 func writeError(w http.ResponseWriter, message string, status int) {
@@ -126,29 +141,79 @@ func writeError(w http.ResponseWriter, message string, status int) {
 }
 
 func main() {
+	// Get environment variables or use defaults
 	nameNodeAddr := os.Getenv("NAMENODE_ADDRESS")
 	if nameNodeAddr == "" {
 		nameNodeAddr = ":3009"
 	}
+	log.Printf("Using NameNode address: %s", nameNodeAddr)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = ":8080"
 	}
-	// Initialize your store
+	log.Printf("Starting client server on port %s", port)
+
+	// Use data directory for client cache
+	dataRoot := "/data/client"
+	if _, err := os.Stat("/data"); os.IsNotExist(err) {
+		// Fallback for local development
+		dataRoot = "client-data"
+		// Ensure the directory exists
+		os.MkdirAll(dataRoot, 0755)
+	}
+	log.Printf("Using data root: %s", dataRoot)
+
+	// Initialize store
 	storer := store.NewStore(store.StoreOpts{
 		BlockSize: 5,
-		Root:      "root",
-	}) // Adjust based on your actual store initialization
+		Root:      dataRoot,
+	})
 
-	server, err := NewServer(nameNodeAddr, storer) // Adjust the namenode address
+	// Create server
+	server, err := NewServer(nameNodeAddr, storer)
 	if err != nil {
 		log.Fatalf("Failed to create server: %v", err)
 	}
 
+	// Set up routes
 	http.HandleFunc("/upload", server.handleUpload)
 	http.HandleFunc("/download", server.handleDownload)
+	http.HandleFunc("/info", server.handleInfo)
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head>
+  <title>Distributed File System</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+    h1 { color: #333; }
+    form { margin: 20px 0; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+    input[type="submit"] { background: #4CAF50; color: white; padding: 10px 15px; border: none; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Distributed File System</h1>
+  <form action="/upload" method="post" enctype="multipart/form-data">
+    <h2>Upload File</h2>
+    <input type="file" name="file" required>
+    <input type="submit" value="Upload">
+  </form>
+  <form action="/download" method="get">
+    <h2>Download File</h2>
+    <input type="text" name="hash" placeholder="File Hash" required>
+    <input type="submit" value="Download">
+  </form>
+</body>
+</html>`)
+	})
 
-	log.Printf("Starting server on port %s", port)
+	// Start server
 	if err := http.ListenAndServe(port, nil); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
