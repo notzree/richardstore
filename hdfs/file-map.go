@@ -76,16 +76,40 @@ func NewFileMap(snapshotPath string) *FileMap {
 	return loadedMap
 }
 
+func (fileMap *FileMap) GetFilesArray() []*FileEntry {
+	fileMap.Mu.RLock()
+	defer fileMap.Mu.RUnlock()
+
+	// Create a slice with capacity equal to the number of files
+	files := make([]*FileEntry, 0, len(fileMap.Files))
+
+	// Populate the slice with deep copies of each entry
+	for _, entry := range fileMap.Files {
+		// Create a deep copy of each entry
+		newEntry := NewFileEntry(entry.FileInfo)
+
+		// Copy replica information
+		for nodeId := range entry.Replicas {
+			newEntry.Replicas[nodeId] = struct{}{}
+		}
+
+		files = append(files, newEntry)
+	}
+
+	return files
+}
+
 // Record will Record a file entry into the FileMap. Will merge if an existing key exists
 // Record will automatically ignore any previously files
 func (fileMap *FileMap) Record(file *proto.FileInfo) {
-	fileMap.Mu.Lock()
-	defer fileMap.Mu.Unlock()
-
 	// Check if this exact file (hash + generation stamp) was previously deleted
+
 	if fileMap.IsDeleted(file.Hash, file.GenerationStamp) {
 		return
 	}
+	// isDeleted locks mutex so we acquire lock ATF
+	fileMap.Mu.Lock()
+	defer fileMap.Mu.Unlock()
 
 	// File doesnt exist
 	if _, exist := fileMap.Files[file.Hash]; !exist {
@@ -105,12 +129,11 @@ func (fileMap *FileMap) Record(file *proto.FileInfo) {
 }
 
 func (fileMap *FileMap) AddReplica(file *proto.FileInfo, nodeId uint64) error {
-	fileMap.Mu.Lock()
-	defer fileMap.Mu.Unlock()
-
 	if fileMap.Has(file.Hash) == nil {
 		return fmt.Errorf("cannot add replica to non-existent file")
 	}
+	fileMap.Mu.Lock()
+	defer fileMap.Mu.Unlock()
 
 	entry := fileMap.Files[file.Hash]
 
@@ -124,11 +147,12 @@ func (fileMap *FileMap) AddReplica(file *proto.FileInfo, nodeId uint64) error {
 }
 
 func (fileMap *FileMap) RemoveReplica(file *proto.FileInfo, nodeId uint64) error {
-	fileMap.Mu.Lock()
-	defer fileMap.Mu.Unlock()
 	if fileMap.Has(file.Hash) == nil {
 		return fmt.Errorf("cannot remove replica to non-existent file")
 	}
+
+	fileMap.Mu.Lock()
+	defer fileMap.Mu.Unlock()
 	entry := fileMap.Files[file.Hash]
 	if entry.Replicas == nil {
 		// Already no replicas

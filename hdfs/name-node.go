@@ -133,11 +133,12 @@ func (node *NameNode) StartRPCServer() error {
 func (node *NameNode) WriteFile(ctx context.Context, req *proto.WriteFileRequest) (resp *proto.CreateFileResponse, err error) {
 	node.dnMu.RLock()
 	defer node.dnMu.RUnlock()
+
 	nodes := make([]*proto.DataNodeInfo, 0)
 	incoming_file := req.FileInfo
 
 	// record the initial file that the client sends to the name node.
-	node.Fmp.Record(*NewFileEntry(incoming_file))
+	node.Fmp.Record(incoming_file)
 
 	// calculate the number of required nodes to store this file
 	numRequiredNodes := int(incoming_file.MinReplicationFactor * float32(len(node.DataNodes)))
@@ -282,7 +283,7 @@ func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest
 	}
 	// log.Printf("received heartbeat from %v", req.NodeId)
 	node.fmpMu.RLock()
-	log.Printf("%v", node.Fmp)
+	log.Printf("%v", node.Fmp.GetFilesArray())
 	node.fmpMu.RUnlock()
 	peerDataNode := node.DataNodes[req.NodeId]
 	peerDataNode.Alive = true
@@ -312,7 +313,7 @@ func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest
 }
 
 func (node *NameNode) IncrementalBlockReport(ctx context.Context, req *proto.IncrementalBlockReportRequest) (reqp *proto.BlockReportResponse, err error) {
-	// block report
+	log.Printf("Handling incremental block report from %v", req.NodeId)
 	node.dnMu.Lock()
 	defer node.dnMu.Unlock()
 	peerDataNode, exist := node.DataNodes[req.NodeId]

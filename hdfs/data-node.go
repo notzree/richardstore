@@ -66,52 +66,42 @@ type DataNode struct {
 	state   DataNodeState
 	stateMu *sync.RWMutex
 
-	statMu   *sync.Mutex
-	Capacity uint64
-	Used     uint64
-	Storer   *str.Store
+	Storer *str.Store
 
 	NameNode PeerNameNode
 
-	cmdChan  chan *proto.Command // or whatever type you want to send
+	cmdChan  chan *proto.Command
 	errChan  chan error
 	doneChan chan interface{}
 
 	cLogMu    *sync.Mutex
 	ChangeLog []*proto.FileUpdate
 
-	// InitialHeartbeatInterval   time.Duration
-	// InitialBlockReportInterval time.Duration
 	proto.UnimplementedDataNodeServer
 }
 
-func NewDataNode(Id uint64, address string, storer *str.Store, maxSimCommands int, max_retires int, capacity *uint64) *DataNode {
-	var nodeCapacity uint64
+func NewDataNode(Id uint64, address string, storer *str.Store, maxSimCommands int, max_retires int) *DataNode {
 
-	if capacity != nil {
-		nodeCapacity = *capacity
-	} else {
-		nodeCapacity = storer.GetAvailableCapacity()
-	}
 	return &DataNode{
 		Id:          Id,
 		address:     address,
 		Storer:      storer,
-		statMu:      &sync.Mutex{},
-		Capacity:    nodeCapacity,
-		Used:        0,
 		cmdChan:     make(chan *proto.Command, maxSimCommands),
 		errChan:     make(chan error, 1),
 		MAX_RETRIES: max_retires,
 		doneChan:    make(chan interface{}),
 		state:       SafeMode,
 		stateMu:     &sync.RWMutex{},
+		cLogMu:      &sync.Mutex{},
+		ChangeLog:   make([]*proto.FileUpdate, 0),
 	}
 }
+
 func (node *DataNode) sendError(e error) {
 	log.Printf("err %v", e)
 	node.errChan <- e
 }
+
 func (node *DataNode) Run() error {
 	if err := node.InitializeClients(); err != nil {
 		return err
@@ -173,7 +163,7 @@ func (node *DataNode) WriteFile(stream grpc.ClientStreamingServer[proto.FileStre
 
 	var replicator *FilestreamReplicator
 
-	if len(info.DataNodes) >= 0 {
+	if len(info.DataNodes) > 0 {
 		downstreamNodeInfo := info.DataNodes[0]
 		downstreamInfo := &proto.StreamInfo{
 			FileInfo:  info.FileInfo,
@@ -221,38 +211,39 @@ func (node *DataNode) WriteFile(stream grpc.ClientStreamingServer[proto.FileStre
 			}
 		}
 	}()
+
 	hash, err := node.Storer.Write(pr)
 	if err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
 	}
-	response, err := replicator.CloseAndRecv()
-	if err != nil {
-		return fmt.Errorf("err closing replication stream: %v", err)
+
+	if replicator != nil {
+		response, err := replicator.CloseAndRecv()
+		if err != nil {
+			return fmt.Errorf("err closing replication stream: %v", err)
+		}
+		if !response.Success {
+			// TODO: Should we delete this to avoid partial failures?
+			return fmt.Errorf("failed to replicate to downstream nodes %v", err)
+		}
 	}
-	if !response.Success {
-		// TODO: Should we delete this to avoid partial failures?
-		return fmt.Errorf("failed to replicate to downstream nodes %v", err)
-	}
+
 	if hash != expectedFileHash {
 		err := node.Storer.Delete(hash) // don't save corrupt data
 		didDelete := true
 		if err != nil {
 			didDelete = false
-			fmt.Printf("failed to orphaned file with hash %v", hash)
+			fmt.Printf("failed to delete orphaned file with hash %v", hash)
 		}
 		return fmt.Errorf("file hash mismatch expected %s got %s | did delete: %v:", expectedFileHash, hash, didDelete)
 	}
 
-	node.statMu.Lock()
-	defer node.statMu.Unlock()
-	node.Used += info.FileInfo.Size
-
 	node.cLogMu.Lock()
-	defer node.cLogMu.Unlock()
 	node.ChangeLog = append(node.ChangeLog, &proto.FileUpdate{
 		FileInfo: info.FileInfo,
 		Update:   *proto.FileUpdate_UPDATE_ADD.Enum(),
 	})
+	node.cLogMu.Unlock()
 
 	log.Printf("File replication completed for node %d", node.Id)
 	return stream.SendAndClose(&proto.WriteFileResponse{
@@ -290,7 +281,7 @@ func (node *DataNode) ReadFile(req *proto.ReadFileRequest, stream grpc.ServerStr
 
 	buf := make([]byte, 512*1024)
 	for {
-		_, err := file.Read(buf)
+		n, err := file.Read(buf)
 		if err == io.EOF {
 			break
 		}
@@ -299,7 +290,7 @@ func (node *DataNode) ReadFile(req *proto.ReadFileRequest, stream grpc.ServerStr
 		}
 		err = stream.Send(&proto.FileStream{
 			Type: &proto.FileStream_Chunk{
-				Chunk: buf,
+				Chunk: buf[:n],
 			},
 		})
 		if err != nil {
@@ -313,10 +304,15 @@ func (node *DataNode) ReadFile(req *proto.ReadFileRequest, stream grpc.ServerStr
 func (node *DataNode) SendHeartbeat() (time.Duration, error) {
 	c := node.NameNode.Client
 	ctx := context.Background()
+
+	// Get capacity and used size from the store
+	capacity := node.Storer.Capacity
+	used := node.Storer.GetUsedSize()
+
 	response, err := c.client.Heartbeat(ctx, &proto.HeartbeatRequest{
 		NodeId:   node.Id,
-		Capacity: node.Capacity,
-		Used:     node.Used,
+		Capacity: capacity,
+		Used:     used,
 		Address:  node.address,
 	})
 	if err != nil {
@@ -389,10 +385,14 @@ func (node *DataNode) SendBlockreport() (time.Duration, error) {
 		file.Close()
 	}
 
+	// Get capacity and used size from the store
+	capacity := node.Storer.Capacity
+	used := node.Storer.GetUsedSize()
+
 	response, err := c.client.BlockReport(ctx, &proto.BlockReportRequest{
 		NodeId:       node.Id,
-		Capacity:     node.Capacity,
-		Used:         node.Used,
+		Capacity:     capacity,
+		Used:         used,
 		Timestamp:    uint64(time.Now().Unix()),
 		HeldFiles:    heldFiles,
 		LastReportId: 0, // not implemented or used currently
@@ -401,7 +401,6 @@ func (node *DataNode) SendBlockreport() (time.Duration, error) {
 		return 0, err
 	}
 	return time.Duration(response.NextReportDelay), nil
-
 }
 
 func (node *DataNode) HandleBlockReport() {
@@ -449,10 +448,11 @@ func (node *DataNode) HandleIncrementalBlockreport() {
 	// max consecutive retries
 	MAX_RETRIES := node.MAX_RETRIES
 	interval := 10 * time.Second // Default interval for initial failure case
+
 	// Try first block report
 	newInterval, err := node.SendIncrementalBlockReport()
 	if err != nil {
-		log.Printf("err sending initial block report %s", err)
+		log.Printf("err sending initial incremental block report %s", err)
 		MAX_RETRIES -= 1
 	} else {
 		interval = newInterval
@@ -483,8 +483,8 @@ func (node *DataNode) HandleIncrementalBlockreport() {
 			}
 		}
 	}
-
 }
+
 func (node *DataNode) SendIncrementalBlockReport() (time.Duration, error) {
 	// minimize lock contention
 	node.cLogMu.Lock()
@@ -502,7 +502,6 @@ func (node *DataNode) SendIncrementalBlockReport() (time.Duration, error) {
 		return 0, nil
 	}
 	return time.Duration(resp.NextReportDelay), nil
-
 }
 
 // Handle + process any commands
@@ -537,16 +536,13 @@ func (node *DataNode) handleDelete(cmd *proto.DeleteCommand) error {
 	if err != nil {
 		return err
 	}
+
 	node.cLogMu.Lock()
-	defer node.cLogMu.Unlock()
 	node.ChangeLog = append(node.ChangeLog, &proto.FileUpdate{
 		FileInfo: cmd.FileInfo,
 		Update:   *proto.FileUpdate_UPDATE_DELETE.Enum(),
 	})
-	// might want to grab the file size again from the file system rather than trusting cmd
-	node.statMu.Lock()
-	defer node.statMu.Unlock()
-	node.Used -= cmd.FileInfo.Size
+	node.cLogMu.Unlock()
 
 	return nil
 }
@@ -624,15 +620,16 @@ func (node *DataNode) InitializeClients() error {
 }
 
 func (node *DataNode) PeerRepresentation() *PeerDataNode {
-	node.statMu.Lock()
-	defer node.statMu.Unlock()
+	// Get capacity and used size directly from the store
+	capacity := node.Storer.Capacity
+	used := node.Storer.GetUsedSize()
+
 	return &PeerDataNode{
 		Id:       node.Id,
 		Address:  node.address,
 		Alive:    true,
 		LastSeen: time.Now(),
-		// in bytes
-		Capacity: node.Capacity,
-		Used:     node.Used,
+		Capacity: capacity,
+		Used:     used,
 	}
 }

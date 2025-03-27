@@ -33,10 +33,11 @@ func NewClient(nameNodeAddr string, storer *str.Store) (*Client, error) {
 	ctx := context.Background()
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	_, err = client.NameNodeClient.client.Info(ctxWithTimeout, &emptypb.Empty{})
+	info, err := client.NameNodeClient.client.Info(ctxWithTimeout, &emptypb.Empty{})
 	if err != nil {
 		return nil, err
 	}
+	log.Print(info)
 	return client, nil
 }
 
@@ -60,21 +61,20 @@ func (c *Client) ReadFile(hash string) (*io.ReadCloser, error) {
 
 func (c *Client) write(file *os.File, minRepFactor float32) (string, error) {
 
-	ctx := context.Background()
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
 	fileInfo, err := c.getFileInfo(file, minRepFactor)
 	if err != nil {
-		return "", nil
+		return "", err
 	}
-
+	ctx := context.Background()
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	nameNodeResp, err := c.NameNodeClient.client.WriteFile(ctxWithTimeout, &proto.WriteFileRequest{
 		FileInfo: fileInfo,
 	})
 	if err != nil {
 		return "", err
 	}
+	log.Print(nameNodeResp.DataNodes)
 	_, err = file.Seek(0, io.SeekStart)
 	if err != nil {
 		return "", err
