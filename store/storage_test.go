@@ -283,6 +283,206 @@ func TestStoreConcurrency(t *testing.T) {
 	})
 }
 
+func TestStoreSizeTracking(t *testing.T) {
+	// Create temporary directory for testing
+	tmpDir, err := os.MkdirTemp("", "store-size-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Test with explicit capacity
+	t.Run("Explicit capacity", func(t *testing.T) {
+		capacity := uint64(1024 * 100) // 100KB
+		store := NewStore(StoreOpts{
+			BlockSize: 5,
+			Root:      tmpDir + "/explicit",
+			Capacity:  capacity,
+		})
+		defer teardown(t, store)
+
+		// Verify initial state
+		assert.Equal(t, capacity, store.Capacity, "Store should have the specified capacity")
+		assert.Equal(t, uint64(0), store.GetUsedSize(), "Initial used size should be 0")
+		assert.Equal(t, capacity, store.GetAvailableSpace(), "Initial available space should equal capacity")
+
+		// Write a file and check size tracking
+		data := make([]byte, 1000) // 1KB
+		hash, err := store.Write(bytes.NewReader(data))
+		assert.NoError(t, err)
+
+		assert.Equal(t, uint64(1000), store.GetUsedSize(), "Used size should be 1000 bytes")
+		assert.Equal(t, capacity-1000, store.GetAvailableSpace(), "Available space should be reduced by 1000 bytes")
+
+		// Write another file
+		data2 := make([]byte, 2000) // 2KB
+		hash2, err := store.Write(bytes.NewReader(data2))
+		assert.NoError(t, err)
+
+		assert.Equal(t, uint64(3000), store.GetUsedSize(), "Used size should be 3000 bytes")
+		assert.Equal(t, capacity-3000, store.GetAvailableSpace(), "Available space should be capacity minus 3000 bytes")
+
+		// Delete a file and check size tracking
+		err = store.Delete(hash)
+		assert.NoError(t, err)
+
+		assert.Equal(t, uint64(2000), store.GetUsedSize(), "Used size should be 2000 bytes after deletion")
+		assert.Equal(t, capacity-2000, store.GetAvailableSpace(), "Available space should be capacity minus 2000 bytes")
+
+		// Delete second file
+		err = store.Delete(hash2)
+		assert.NoError(t, err)
+
+		assert.Equal(t, uint64(0), store.GetUsedSize(), "Used size should be 0 after all deletions")
+		assert.Equal(t, capacity, store.GetAvailableSpace(), "Available space should equal capacity after all deletions")
+	})
+
+	// Test auto capacity from filesystem
+	t.Run("Auto capacity", func(t *testing.T) {
+		store := NewStore(StoreOpts{
+			BlockSize: 5,
+			Root:      tmpDir + "/auto",
+			Capacity:  0, // Auto-detect
+		})
+		defer teardown(t, store)
+
+		// Capacity should be non-zero
+		assert.Greater(t, store.Capacity, uint64(0), "Auto capacity should be greater than 0")
+
+		// Write a file and check size tracking
+		data := make([]byte, 1000) // 1KB
+		_, err := store.Write(bytes.NewReader(data))
+		assert.NoError(t, err)
+
+		assert.Equal(t, uint64(1000), store.GetUsedSize(), "Used size should be 1000 bytes")
+	})
+
+	// Test capacity limits
+	t.Run("Capacity limits", func(t *testing.T) {
+		capacity := uint64(5000) // 5KB limit
+		store := NewStore(StoreOpts{
+			BlockSize: 5,
+			Root:      tmpDir + "/limit",
+			Capacity:  capacity,
+		})
+		defer teardown(t, store)
+
+		// Write a 3KB file - should succeed
+		data1 := make([]byte, 3000)
+		_, err := store.Write(bytes.NewReader(data1))
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(3000), store.GetUsedSize())
+
+		// Write a 3KB file - should fail (exceed capacity)
+		data2 := make([]byte, 3000)
+		_, err = store.Write(bytes.NewReader(data2))
+		assert.Error(t, err, "Write should fail when exceeding capacity")
+		assert.Contains(t, err.Error(), "insufficient space")
+
+		// Used size should still be 3KB (the second write failed)
+		assert.Equal(t, uint64(3000), store.GetUsedSize())
+	})
+
+	// Test file replacement (overwrite)
+	t.Run("File replacement", func(t *testing.T) {
+		store := NewStore(StoreOpts{
+			BlockSize: 5,
+			Root:      tmpDir + "/replace",
+		})
+		defer teardown(t, store)
+
+		// Create a deterministic hash by using the same content repeatedly
+		content := []byte("test content")
+		h := sha256.New()
+		h.Write(content)
+		expectedHash := hex.EncodeToString(h.Sum(nil))
+
+		// First write
+		hash1, err := store.Write(bytes.NewReader(content))
+		assert.NoError(t, err)
+		assert.Equal(t, expectedHash, hash1)
+		initialSize := store.GetUsedSize()
+
+		// Second write of the same content (should replace, not add to size)
+		hash2, err := store.Write(bytes.NewReader(content))
+		assert.NoError(t, err)
+		assert.Equal(t, expectedHash, hash2)
+		assert.Equal(t, initialSize, store.GetUsedSize(), "Size should not increase when overwriting the same file")
+
+		// Write larger version of same content
+		largerContent := append(content, []byte(" with additional data")...)
+		h = sha256.New()
+		h.Write(largerContent)
+		largerHash := hex.EncodeToString(h.Sum(nil))
+
+		hash3, err := store.Write(bytes.NewReader(largerContent))
+		assert.NoError(t, err)
+		assert.Equal(t, largerHash, hash3)
+		assert.Greater(t, store.GetUsedSize(), initialSize, "Size should increase when writing larger file")
+
+		// Write smaller version with same hash as original
+		smallerContent := []byte("test")
+		h = sha256.New()
+		h.Write(smallerContent)
+		smallerHash := hex.EncodeToString(h.Sum(nil))
+
+		hash4, err := store.Write(bytes.NewReader(smallerContent))
+		assert.NoError(t, err)
+		assert.Equal(t, smallerHash, hash4)
+
+		// Clear test
+		err = store.Clear()
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(0), store.GetUsedSize(), "Size should be 0 after Clear()")
+	})
+
+	// Test edge cases
+	t.Run("Edge cases", func(t *testing.T) {
+		store := NewStore(StoreOpts{
+			BlockSize: 5,
+			Root:      tmpDir + "/edge",
+			Capacity:  1000,
+		})
+		defer teardown(t, store)
+
+		// Write a file
+		data := make([]byte, 100)
+		hash, err := store.Write(bytes.NewReader(data))
+		assert.NoError(t, err)
+
+		// Manually corrupt size tracking to test underflow protection
+		store.sizeMu.Lock()
+		store.usedSize = 50 // Less than file size to test underflow protection
+		store.sizeMu.Unlock()
+
+		// Delete should not underflow
+		err = store.Delete(hash)
+		assert.NoError(t, err)
+		assert.Equal(t, uint64(0), store.GetUsedSize(), "Size should be 0 and not underflow after delete")
+
+		// Test recalculation of used size on store creation
+		// First create some files directly (bypassing size tracking)
+		subDir := tmpDir + "/recalc"
+		os.MkdirAll(subDir, 0755)
+
+		// Create a few files with known sizes
+		file1 := subDir + "/file1"
+		file2 := subDir + "/file2"
+		os.WriteFile(file1, make([]byte, 200), 0644)
+		os.WriteFile(file2, make([]byte, 300), 0644)
+
+		// Create a new store pointing to this directory, it should calculate the correct size
+		recalcStore := NewStore(StoreOpts{
+			BlockSize: 5,
+			Root:      subDir,
+		})
+
+		// Size should be the sum of the two files (allowing for potential indexing files)
+		size := recalcStore.GetUsedSize()
+		assert.GreaterOrEqual(t, size, uint64(500), "Recalculated size should include existing files")
+	})
+}
+
 func teardown(t *testing.T, store *Store) {
 	if err := store.Clear(); err != nil {
 		t.Error(err)
