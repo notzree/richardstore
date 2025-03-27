@@ -238,9 +238,9 @@ func (node *DataNode) WriteFile(stream grpc.ClientStreamingServer[proto.FileStre
 		didDelete := true
 		if err != nil {
 			didDelete = false
-			fmt.Errorf("failed to orphaned file with hash %v", hash)
+			fmt.Printf("failed to orphaned file with hash %v", hash)
 		}
-		return fmt.Errorf("file hash mismatch expecte %s got %s | did delete?:", expectedFileHash, hash, didDelete)
+		return fmt.Errorf("file hash mismatch expected %s got %s | did delete: %v:", expectedFileHash, hash, didDelete)
 	}
 
 	node.statMu.Lock()
@@ -605,7 +605,7 @@ func (node *DataNode) handleReplication(cmd *proto.ReplicateCommand) error {
 		return fmt.Errorf("error closing stream: %w", err)
 	}
 	if !response.Success {
-		return fmt.Errorf("failed to replicate file: %s to node: %d", cmd.FileInfo.Hash, target)
+		return fmt.Errorf("failed to replicate file: %s to node: %d", cmd.FileInfo.Hash, target.Id)
 	}
 
 	return nil
