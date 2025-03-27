@@ -2,11 +2,11 @@ package hdfs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/notzree/richardstore/proto"
@@ -17,8 +17,6 @@ import (
 type Client struct {
 	NameNodeAddr   string
 	NameNodeClient *NameNodeClient
-	mu             *sync.RWMutex
-	DataNodeMap    map[string]*DataNodeClient
 	storer         *str.Store
 }
 
@@ -29,8 +27,6 @@ func NewClient(nameNodeAddr string, storer *str.Store) (*Client, error) {
 	}
 	client := &Client{
 		NameNodeAddr: nameNodeAddr,
-		mu:           &sync.RWMutex{},
-		DataNodeMap:  make(map[string]*DataNodeClient),
 		storer:       storer,
 	}
 	client.NameNodeClient = nameNodeClient
@@ -41,21 +37,11 @@ func NewClient(nameNodeAddr string, storer *str.Store) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	for _, peerInfo := range info.DataNodes {
-		peerClient, err := NewDataNodeClient(peerInfo.Address)
-		if err != nil {
-			return nil, err
-		}
-		client.DataNodeMap[peerInfo.Address] = peerClient
-	}
+	log.Print(info)
 	return client, nil
 }
 
 func (c *Client) Close() error {
-	for _, peerClient := range c.DataNodeMap {
-		peerClient.Close()
-	}
 	c.NameNodeClient.Close()
 	return nil
 }
@@ -66,140 +52,82 @@ type writeResult struct {
 	err     error
 }
 
-func (c *Client) WriteFile(file *os.File) (string, error) {
-	return c._write(file)
+func (c *Client) WriteFile(file *os.File, minRepFactor float32) (string, error) {
+	return c.write(file, minRepFactor)
 }
-func (c *Client) ReadFile(hash string) (*io.ReadCloser, error) {
-	return c._read(hash)
+func (c *Client) ReadFile(hash string) (io.ReadCloser, error) {
+	return c.read(hash)
 }
 
-func (c *Client) _write(file *os.File) (string, error) {
-	fileInfo, err := file.Stat()
+func (c *Client) write(file *os.File, minRepFactor float32) (string, error) {
+
+	fileInfo, err := c.getFileInfo(file, minRepFactor)
 	if err != nil {
-		return "", fmt.Errorf("failed to get file info: %w", err)
+		return "", err
 	}
-	size := uint64(fileInfo.Size())
-
 	ctx := context.Background()
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
-	resp, err := c.NameNodeClient.client.CreateFile(ctxWithTimeout, &proto.CreateFileRequest{
-		Size:                 size,
-		MinReplicationFactor: 0.5,
+	nameNodeResp, err := c.NameNodeClient.client.WriteFile(ctxWithTimeout, &proto.WriteFileRequest{
+		FileInfo: fileInfo,
 	})
-
 	if err != nil {
 		return "", err
 	}
-
-	expectedFileAddr, err := c.storer.CreateAddress(file)
-	if err != nil {
-		return "", err
-	}
-
+	log.Print(nameNodeResp.DataNodes)
 	_, err = file.Seek(0, io.SeekStart)
 	if err != nil {
 		return "", err
 	}
 
-	resultCh := make(chan writeResult, len(resp.DataNodes))
-	var wg sync.WaitGroup
+	log.Println("initiating replication stream")
 
-	for i, targetNode := range resp.DataNodes {
-		wg.Add(1)
-		go func(idx int, addr string) {
-			defer wg.Done()
-
-			c.mu.RLock()
-			peerClient, ok := c.DataNodeMap[addr]
-			c.mu.RUnlock()
-
-			if !ok {
-				resultCh <- writeResult{nodeIdx: idx, success: false, err: fmt.Errorf("node not found: %s", addr)}
-				return
-			}
-
-			stream, err := peerClient.client.WriteFile(ctxWithTimeout)
-			if err != nil {
-				resultCh <- writeResult{nodeIdx: idx, success: false, err: fmt.Errorf("failed to create stream: %w", err)}
-				return
-			}
-
-			err = stream.Send(&proto.WriteFileRequest{
-				Request: &proto.WriteFileRequest_FileInfo{
-					FileInfo: &proto.FileInfo{
-						Hash: expectedFileAddr.HashStr,
-						Size: size,
-					},
-				},
-			})
-			if err != nil {
-				resultCh <- writeResult{nodeIdx: idx, success: false, err: fmt.Errorf("failed to send file info: %w", err)}
-				return
-			}
-			buf := make([]byte, 1024)
-			for {
-				n, err := file.Read(buf)
-				if err == io.EOF {
-					break
-				}
-				if err != nil {
-					resultCh <- writeResult{nodeIdx: idx, success: false, err: fmt.Errorf("error reading file: %w", err)}
-					return
-				}
-
-				err = stream.Send(&proto.WriteFileRequest{
-					Request: &proto.WriteFileRequest_Chunk{
-						Chunk: buf[:n],
-					},
-				})
-				if err != nil {
-					resultCh <- writeResult{nodeIdx: idx, success: false, err: fmt.Errorf("failed to send chunk: %w", err)}
-					return
-				}
-			}
-
-			resp, err := stream.CloseAndRecv()
-			if err != nil {
-				resultCh <- writeResult{nodeIdx: idx, success: false, err: fmt.Errorf("error receiving response: %w", err)}
-				return
-			}
-			log.Printf("node %d reported success", idx)
-			resultCh <- writeResult{nodeIdx: idx, success: resp.Success, err: nil}
-		}(i, targetNode.Address)
+	firstPeer, err := NewDataNodeClient(nameNodeResp.DataNodes[0].Address)
+	if err != nil {
+		return "", err
 	}
-
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
-	// Collect results and check for failures
-	var errors []error
-	successCount := 0
-	for result := range resultCh {
-		if result.err != nil {
-			errors = append(errors, fmt.Errorf("node %d: %w", result.nodeIdx, result.err))
-		} else if result.success {
-			successCount++
+	stream, err := firstPeer.client.WriteFile(ctxWithTimeout)
+	// send first message
+	err = stream.Send(&proto.FileStream{
+		Type: &proto.FileStream_StreamInfo{
+			StreamInfo: &proto.StreamInfo{
+				FileInfo:  fileInfo,
+				DataNodes: nameNodeResp.DataNodes[1:],
+			},
+		},
+	})
+	buf := make([]byte, 1024)
+	for {
+		n, err := file.Read(buf)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		err = stream.Send(&proto.FileStream{
+			Type: &proto.FileStream_Chunk{
+				Chunk: buf[:n],
+			},
+		})
+		if err != nil {
+			return "", err
 		}
 	}
-
-	if len(errors) > 0 {
-		return "", fmt.Errorf("write failed on some nodes: %v", errors)
+	resp, err := stream.CloseAndRecv()
+	if err != nil {
+		return "", err
+	}
+	if !resp.Success {
+		return "", errors.New("internal data node error! failed to write to datanode")
 	}
 
-	if successCount == 0 {
-		return "", fmt.Errorf("write failed on all nodes")
-	}
-
-	return expectedFileAddr.HashStr, nil
+	return fileInfo.Hash, nil
 }
 
-func (c *Client) _read(hash string) (*io.ReadCloser, error) {
+func (c *Client) read(hash string) (io.ReadCloser, error) {
 	ctx := context.Background()
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	resp, err := c.NameNodeClient.client.ReadFile(ctxWithTimeout, &proto.ReadFileRequest{
 		Hash: hash,
@@ -207,98 +135,119 @@ func (c *Client) _read(hash string) (*io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	readerChan := make(chan io.ReadCloser, len(resp.DataNodes))
-	errorChan := make(chan error, len(resp.DataNodes))
-	readCtx, readCancel := context.WithCancel(context.Background())
-	defer readCancel()
-	for _, node := range resp.DataNodes {
-		go func(nodeInfo *proto.DataNodeInfo) {
-			c.mu.RLock()
-			client, ok := c.DataNodeMap[nodeInfo.Address]
-			if !ok {
-				errorChan <- fmt.Errorf("error getting data node client for node %s", nodeInfo.Address)
-			}
-			c.mu.Unlock()
-			ctx := context.Background()
-			ctxWithTimeout, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
-			stream, err := client.client.ReadFile(ctxWithTimeout, &proto.ReadFileRequest{
-				Hash: hash,
-			})
-			if err != nil {
-				errorChan <- fmt.Errorf("error creating stream: %v", err)
-				return
-			}
-			firstMsg, err := stream.Recv()
-			if err != nil {
-				errorChan <- fmt.Errorf("error receiving first message: %v", err)
-				stream.CloseSend()
-				return
-			}
+	log.Printf("namenode instructed to read from datanodes: %v", resp.DataNodes)
 
-			if firstMsg.Request.(*proto.ReadFileStream_FileInfo).FileInfo.Hash != hash {
-				errorChan <- fmt.Errorf("error hash mismatch: expected %s got %s", hash, firstMsg.Request.(*proto.ReadFileStream_FileInfo).FileInfo.Hash)
-				stream.CloseSend()
-				return
-			}
-
-			pr, pw := io.Pipe()
-			go func() {
-				defer pw.Close()
-				defer stream.CloseSend()
-				go func() {
-					<-readCtx.Done()
-					stream.CloseSend()
-					pw.CloseWithError(context.Canceled)
-				}()
-				for {
-					resp, err := stream.Recv()
-					if err == io.EOF {
-						break
-					}
-					if err != nil {
-						log.Printf("error receiving chunk: %v", err)
-						pw.CloseWithError(fmt.Errorf("error receiving chunk: %w", err))
-						return
-					}
-					chunk, ok := resp.Request.(*proto.ReadFileStream_Chunk)
-					if !ok {
-						pw.CloseWithError(fmt.Errorf("expected chunk message"))
-						log.Printf("error: expected chunk message")
-						return
-					}
-					_, err = pw.Write(chunk.Chunk)
-					if err != nil {
-						pw.CloseWithError(fmt.Errorf("error writing to pipe: %w", err))
-						log.Printf("error writing chunk: %v", err)
-						return
-					}
-				}
-			}()
-			readerChan <- pr
-		}(node)
-	}
 	var lastErr error
-	remainingNodes := len(resp.DataNodes)
-
-	for {
-		select {
-		case reader := <-readerChan:
-			// Got a successful reader, cancel other reads and return
-			readCancel()
-			return &reader, nil
-
-		case err := <-errorChan:
-			remainingNodes--
+	for _, node := range resp.DataNodes {
+		// Try connecting to this datanode
+		client, err := NewDataNodeClient(node.Address)
+		if err != nil {
+			log.Printf("error connecting to datanode %s: %v", node.Address, err)
 			lastErr = err
-			if remainingNodes == 0 {
-				// All nodes failed
-				return nil, fmt.Errorf("all nodes failed: %v", lastErr)
-			}
-
-		case <-ctxWithTimeout.Done():
-			return nil, fmt.Errorf("read timeout")
+			continue // Try next datanode
 		}
+
+		// Create stream
+		nodeCtx := context.Background()
+		nodeCtxWithTimeout, nodeCancel := context.WithTimeout(nodeCtx, 10*time.Second)
+
+		stream, err := client.client.ReadFile(nodeCtxWithTimeout, &proto.ReadFileRequest{
+			Hash: hash,
+		})
+		if err != nil {
+			log.Printf("error creating stream with datanode %s: %v", node.Address, err)
+			nodeCancel()
+			lastErr = err
+			continue // Try next datanode
+		}
+
+		// Check first message
+		firstMsg, err := stream.Recv()
+		if err != nil {
+			log.Printf("error receiving first message from datanode %s: %v", node.Address, err)
+			stream.CloseSend()
+			nodeCancel()
+			lastErr = err
+			continue // Try next datanode
+		}
+
+		// Verify hash
+		if firstMsg.Type.(*proto.FileStream_StreamInfo).StreamInfo.FileInfo.Hash != hash {
+			log.Printf("hash mismatch from datanode %s: expected %s got %s",
+				node.Address, hash, firstMsg.Type.(*proto.FileStream_StreamInfo).StreamInfo.FileInfo.Hash)
+			stream.CloseSend()
+			nodeCancel()
+			lastErr = fmt.Errorf("hash mismatch")
+			continue // Try next datanode
+		}
+
+		// This datanode looks good, create pipe and start reading
+		pr, pw := io.Pipe()
+
+		// Start background goroutine to handle reading from stream and writing to pipe
+		go func() {
+			defer pw.Close()
+			defer stream.CloseSend()
+			defer nodeCancel()
+
+			for {
+				resp, err := stream.Recv()
+				if err == io.EOF {
+					// Normal end of stream
+					break
+				}
+				if err != nil {
+					log.Printf("error receiving chunk: %v", err)
+					pw.CloseWithError(fmt.Errorf("error receiving chunk: %w", err))
+					return
+				}
+
+				chunk, ok := resp.Type.(*proto.FileStream_Chunk)
+				if !ok {
+					pw.CloseWithError(fmt.Errorf("expected chunk message"))
+					log.Printf("error: expected chunk message")
+					return
+				}
+
+				_, err = pw.Write(chunk.Chunk)
+				if err != nil {
+					pw.CloseWithError(fmt.Errorf("error writing to pipe: %w", err))
+					log.Printf("error writing chunk: %v", err)
+					return
+				}
+			}
+		}()
+
+		// Successfully set up reader with this datanode
+		reader := io.ReadCloser(pr)
+		return reader, nil
 	}
 
+	// If we get here, all datanodes failed
+	return nil, fmt.Errorf("all datanodes failed, last error: %v", lastErr)
+}
+
+func (c *Client) getFileInfo(file *os.File, minRepFactor float32) (*proto.FileInfo, error) {
+	// Get file information
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+
+	// Calculate a simple hash from the file path and modification time
+	expectedFileAddr, err := c.storer.CreateAddress(file)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create the FileInfo protobuf message
+	pbFileInfo := &proto.FileInfo{
+		Hash:                 expectedFileAddr.HashStr,
+		Size:                 uint64(fileInfo.Size()),
+		MinReplicationFactor: minRepFactor, // Default value, adjust as needed
+		ModificationStamp:    uint64(fileInfo.ModTime().UnixNano()),
+		GenerationStamp:      uint64(time.Now().UnixNano()), // Current time as per requirements
+	}
+
+	return pbFileInfo, nil
 }

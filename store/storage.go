@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -19,13 +20,17 @@ import (
 type StoreOpts struct {
 	BlockSize int
 	Root      string
+	// Capacity in bytes, if 0 use all available space
+	Capacity uint64
 }
 
 // concurrent safe struct to read/write bytes to a CAS file system
 type Store struct {
 	StoreOpts
-	mu    sync.RWMutex // mutex for the locks map
-	locks map[string]*lock
+	mu       sync.RWMutex // mutex for the locks map
+	locks    map[string]*lock
+	sizeMu   sync.RWMutex // mutex for size tracking
+	usedSize uint64       // total size of all stored files in bytes
 }
 
 type lock struct {
@@ -42,10 +47,70 @@ func NewStore(opts StoreOpts) *Store {
 		}
 		opts.Root = cwd
 	}
-	return &Store{
+
+	// Create the root directory if it doesn't exist
+	if err := os.MkdirAll(opts.Root, 0755); err != nil {
+		panic(fmt.Errorf("failed to create root directory: %w", err))
+	}
+
+	store := &Store{
 		StoreOpts: opts,
 		locks:     make(map[string]*lock),
+		usedSize:  0,
 	}
+
+	// Set capacity to available space if not explicitly set
+	if opts.Capacity == 0 {
+		store.Capacity = store.GetAvailableCapacity()
+	}
+
+	// Calculate current used size by scanning existing files
+	store.calculateUsedSize()
+
+	return store
+}
+
+// calculateUsedSize scans all files in the store and updates the usedSize field
+func (s *Store) calculateUsedSize() {
+	files, err := s.Stat()
+	if err != nil {
+		log.Printf("Warning: Could not calculate initial used size: %v", err)
+		return
+	}
+
+	var totalSize uint64
+	for _, file := range files {
+		info, err := file.Stat()
+		if err != nil {
+			file.Close()
+			continue
+		}
+		totalSize += uint64(info.Size())
+		file.Close()
+	}
+
+	s.sizeMu.Lock()
+	s.usedSize = totalSize
+	s.sizeMu.Unlock()
+	log.Printf("Initial store used size: %d bytes", totalSize)
+}
+
+// GetUsedSize returns the total size of all files in the store
+func (s *Store) GetUsedSize() uint64 {
+	s.sizeMu.RLock()
+	defer s.sizeMu.RUnlock()
+	return s.usedSize
+}
+
+// GetAvailableSpace returns the remaining space available for storage
+func (s *Store) GetAvailableSpace() uint64 {
+	s.sizeMu.RLock()
+	defer s.sizeMu.RUnlock()
+
+	if s.usedSize >= s.Capacity {
+		return 0
+	}
+	return s.Capacity - s.usedSize
 }
 
 // gets or creates a lock for given hash (key)
@@ -118,7 +183,6 @@ func (s *Store) GetAddress(hashStr string) (FileAddress, error) {
 		PathName: pathStr,
 		HashStr:  hashStr,
 	}, nil
-
 }
 
 // Delete removes the file and any empty sub-directories given a hash
@@ -132,6 +196,14 @@ func (s *Store) Delete(key string) error {
 	if err != nil {
 		return err
 	}
+
+	// Get file size before deleting
+	fileInfo, err := os.Stat(path.FullPath())
+	if err != nil {
+		return err
+	}
+	fileSize := uint64(fileInfo.Size())
+
 	dir := filepath.Dir(path.FullPath())
 	fmt.Println("full path:", dir)
 	// delete file
@@ -139,6 +211,18 @@ func (s *Store) Delete(key string) error {
 	if err != nil {
 		return err
 	}
+
+	// Update size tracking
+	s.sizeMu.Lock()
+	if s.usedSize >= fileSize {
+		s.usedSize -= fileSize
+	} else {
+		// Safeguard against underflow
+		s.usedSize = 0
+		log.Printf("Warning: Size tracking inconsistency detected during delete of %s", key)
+	}
+	s.sizeMu.Unlock()
+
 	// remove empty directories excluding root directory
 	for dir != s.Root {
 		err = os.Remove(dir)
@@ -197,6 +281,22 @@ func (s *Store) Write(r io.Reader) (string, error) {
 	if err := os.MkdirAll(s.Root, fs.ModePerm); err != nil {
 		return "", fmt.Errorf("failed to create root directory: %w", err)
 	}
+
+	// Create a temporary buffer to determine the file size before writing
+	var buf bytes.Buffer
+	size, err := io.Copy(&buf, r)
+	if err != nil {
+		return "", fmt.Errorf("failed to read data: %w", err)
+	}
+
+	// Check if we have enough space
+	s.sizeMu.RLock()
+	if uint64(size) > s.Capacity-s.usedSize {
+		s.sizeMu.RUnlock()
+		return "", fmt.Errorf("insufficient space: need %d bytes, have %d bytes available", size, s.Capacity-s.usedSize)
+	}
+	s.sizeMu.RUnlock()
+
 	tempFile, err := os.CreateTemp(s.Root, "temp-*")
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
@@ -213,13 +313,15 @@ func (s *Store) Write(r io.Reader) (string, error) {
 
 	h := sha256.New()
 
+	// Reset buffer position
+	bufReader := bytes.NewReader(buf.Bytes())
+
 	writer := io.MultiWriter(tempFile, h)
-	// Stream data from reader to MultiWriter which streams to -> tempFile, h
-	if _, err = io.Copy(writer, r); err != nil {
+	// Stream data from buffer to MultiWriter which streams to -> tempFile, h
+	if _, err = io.Copy(writer, bufReader); err != nil {
 		return "", fmt.Errorf("failed to write data: %w", err)
 	}
 
-	// Get address using existing function
 	hashStr := hex.EncodeToString(h.Sum(nil))
 	address, err := s.GetAddress(hashStr)
 	if err != nil {
@@ -231,6 +333,12 @@ func (s *Store) Write(r io.Reader) (string, error) {
 	defer s.releaseLock(address.HashStr)
 	fileLock.Lock()
 	defer fileLock.Unlock()
+
+	// Check if file already exists (to avoid double-counting size)
+	existingSize := uint64(0)
+	if info, err := os.Stat(address.FullPath()); err == nil {
+		existingSize = uint64(info.Size())
+	}
 
 	// Create directories
 	if err := os.MkdirAll(address.PathName, fs.ModePerm); err != nil {
@@ -247,66 +355,36 @@ func (s *Store) Write(r io.Reader) (string, error) {
 		return "", fmt.Errorf("failed to move file to final location: %w", err)
 	}
 
-	fmt.Printf("wrote file to disk: %s\n", hashStr)
+	// Update size tracking (only count the net new size if replacing an existing file)
+	s.sizeMu.Lock()
+	netNewSize := uint64(size)
+	if existingSize > 0 {
+		if netNewSize > existingSize {
+			netNewSize -= existingSize
+		} else {
+			netNewSize = 0
+		}
+	}
+	s.usedSize += netNewSize
+	s.sizeMu.Unlock()
+
+	fmt.Printf("wrote file to disk: %s (size: %d bytes)\n", hashStr, size)
 	return hashStr, nil
 }
 
-// func (s *Store) Write(r io.Reader) (string, error) {
-// 	buff := new(bytes.Buffer)
-// 	tee := io.TeeReader(r, buff) // writes to buffer what it reads from R
-// 	addr, err := s.CreateAddress(tee)
-// 	if err != nil {
-// 		return "", err
-// 	}
-
-// 	log.Println(buff.Bytes())
-
-// 	fileLock := s.getLock(addr.HashStr)
-// 	defer s.releaseLock(addr.HashStr)
-// 	fileLock.Lock()
-// 	defer fileLock.Unlock()
-
-// 	return s.writeStream(buff)
-// }
-
-// writeStream writes a file into our CAS.
-// func (s *Store) writeStream(r io.Reader) (string, error) {
-// 	var buf1, buf2 bytes.Buffer
-// 	r = io.TeeReader(r, io.MultiWriter(&buf1, &buf2)) // using teeReader to 'clone' the file to read twice (once for hash, another to save it)
-// 	_, err := io.Copy(&buf1, r)
-// 	if err != nil {
-// 		return "", err
-// 	}
-
-// 	address, err := s.CreateAddress(&buf1)
-// 	if err != nil {
-// 		return "", err
-// 	}
-
-// 	// Create necessary directories
-// 	if err := os.MkdirAll(address.PathName, fs.ModePerm); err != nil {
-// 		return "", err
-// 	}
-
-// 	// Create the file and copy the stream to it
-// 	f, err := os.Create(address.FullPath())
-// 	if err != nil {
-// 		return "", err
-// 	}
-// 	defer f.Close()
-
-// 	n, err := io.Copy(f, &buf2)
-// 	if err != nil {
-// 		return "", err
-// 	}
-
-// 	fmt.Printf("wrote %d bytes to disk, %s\n", n, address.HashStr)
-// 	return address.HashStr, nil
-// }
-
 // Clear deletes the root and all subdirectories
 func (s *Store) Clear() error {
-	return os.RemoveAll(s.Root)
+	err := os.RemoveAll(s.Root)
+	if err != nil {
+		return err
+	}
+
+	// Reset size tracking
+	s.sizeMu.Lock()
+	s.usedSize = 0
+	s.sizeMu.Unlock()
+
+	return nil
 }
 
 // Stat opens (DOES NOT close) and returns a list of os.Files that the storer has stored.
@@ -355,5 +433,6 @@ func (s *Store) GetAvailableCapacity() uint64 {
 		log.Printf("Warning: Could not get disk stats: %v", err)
 		return 1 << 40 // 1TB default for now?
 	}
+	log.Printf("Bavail: %v, Bsize: %v", stat.Bavail, stat.Bsize)
 	return stat.Bavail * uint64(stat.Bsize)
 }

@@ -14,31 +14,6 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-type FileEntry struct {
-	*proto.FileInfo                        // fields of FileInfo
-	Replicas        map[uint64]interface{} // set containing list of data node ids that have the file
-}
-
-func NewFileEntry(fi *proto.DataNodeFile) *FileEntry {
-	return &FileEntry{
-		FileInfo: &proto.FileInfo{
-			Hash:            fi.Hash,
-			Size:            fi.Size,
-			GenerationStamp: fi.ModificationStamp,
-		},
-		Replicas: make(map[uint64]interface{}),
-	}
-}
-
-// FileMap maps file hash -> FileEntry
-type FileMap map[string]*FileEntry
-type NodeType int
-
-const (
-	Name NodeType = iota
-	Data
-)
-
 // Peer node view of NameNode
 type PeerNameNode struct {
 	Id      uint64
@@ -53,7 +28,6 @@ type NameNodeClient struct {
 
 func NewNameNodeClient(address string) (*NameNodeClient, error) {
 	log.Printf("Attempting to connect to namenode at %s", address)
-
 	// Force the connection attempt to be blocking so we can see what's happening
 	conn, err := grpc.NewClient(
 		address,
@@ -97,21 +71,16 @@ type NameNode struct {
 	proto.UnimplementedNameNodeServer
 }
 
-func NewNameNode(Id uint64, address string, dataNodesSlice []PeerDataNode, hbInterval time.Duration, blockReportInterval time.Duration, mxCmd int) *NameNode {
+func NewNameNode(Id uint64, address string, hbInterval time.Duration, blockReportInterval time.Duration, mxCmd int) *NameNode {
 	initialCommands := make(map[uint64][]*proto.Command)
 	dataNodeMap := make(map[uint64]*PeerDataNode)
-	for _, dn := range dataNodesSlice {
-		dnCopy := dn
-		dataNodeMap[dn.Id] = &dnCopy
-		initialCommands[dn.Id] = make([]*proto.Command, 0)
-	}
 
 	return &NameNode{
 		Id:      Id,
 		address: address,
 
 		fmpMu: &sync.RWMutex{},
-		Fmp:   make(FileMap),
+		Fmp:   *NewFileMap("./snapshot.bin"),
 
 		dnMu:      &sync.RWMutex{},
 		DataNodes: dataNodeMap,
@@ -126,10 +95,6 @@ func NewNameNode(Id uint64, address string, dataNodesSlice []PeerDataNode, hbInt
 }
 
 func (node *NameNode) PeerRepresentation() *PeerNameNode {
-	// c, err := NewNameNodeClient(node.address)
-	// if err != nil {
-	// 	panic("failed to initiate name node connection")
-	// }
 	return &PeerNameNode{
 		Id:      node.Id,
 		Address: node.address,
@@ -165,25 +130,35 @@ func (node *NameNode) StartRPCServer() error {
 	return server.Serve(ln)
 }
 
-func (node *NameNode) CreateFile(ctx context.Context, req *proto.CreateFileRequest) (resp *proto.CreateFileResponse, err error) {
+func (node *NameNode) WriteFile(ctx context.Context, req *proto.WriteFileRequest) (resp *proto.CreateFileResponse, err error) {
 	node.dnMu.RLock()
 	defer node.dnMu.RUnlock()
-	nodes := make([]*proto.DataNodeInfo, 0)
 
-	numRequiredNodes := int(int(req.MinReplicationFactor) * len(node.DataNodes))
+	nodes := make([]*proto.DataNodeInfo, 0)
+	incoming_file := req.FileInfo
+
+	// record the initial file that the client sends to the name node.
+	node.Fmp.Record(incoming_file)
+
+	// calculate the number of required nodes to store this file
+	numRequiredNodes := int(incoming_file.MinReplicationFactor * float32(len(node.DataNodes)))
+	log.Printf("total number of nodes: %v", len(node.DataNodes))
+	log.Printf("number of required nodes to store: %v", numRequiredNodes)
 	// in the future I would make this a heap thing
 	for _, dataNode := range node.DataNodes {
-		if !dataNode.Alive || (dataNode.Capacity-dataNode.Used) < req.Size {
-			continue
-		}
-		nodes = append(nodes, &proto.DataNodeInfo{Address: dataNode.Address})
 		if len(nodes) >= numRequiredNodes {
 			break
 		}
+		if !dataNode.Alive || (dataNode.Capacity-dataNode.Used) < incoming_file.Size {
+			continue
+		}
+
+		nodes = append(nodes, &proto.DataNodeInfo{Address: dataNode.Address})
 	}
+	log.Printf("telling client to write to %v nodes", len(nodes))
 	if len(nodes) < numRequiredNodes {
-		return nil, fmt.Errorf("insufficient available datanodes for replication factor %.0f: need %d, found %d",
-			req.MinReplicationFactor, numRequiredNodes, len(nodes))
+		return nil, fmt.Errorf("insufficient available datanodes with capacity for replication factor %.0f: need %d, found %d",
+			incoming_file.MinReplicationFactor, numRequiredNodes, len(nodes))
 	}
 	return &proto.CreateFileResponse{
 		DataNodes: nodes,
@@ -196,12 +171,20 @@ func (node *NameNode) ReadFile(ctx context.Context, req *proto.ReadFileRequest) 
 	node.dnMu.RLock()
 	defer node.dnMu.RUnlock()
 	availableNodes := make([]*proto.DataNodeInfo, 0)
-	fileEntry, exist := node.Fmp[req.Hash]
-	if !exist {
+	fileEntry := node.Fmp.Has(req.Hash)
+	if fileEntry == nil {
+		log.Print("file not found\n")
+		log.Printf("known files:\n %v", node.Fmp)
 		// do we return empty or throw error!?
 		return &proto.ReadFileResponse{DataNodes: availableNodes, Size: 0}, nil
 	}
-	for id, _ := range fileEntry.Replicas {
+	if len(fileEntry.Replicas) == 0 {
+		// Case where the write is stored on the NameNode, but no DataNodes have sent a block report
+		// or partial block report to indicate that they are storing the file
+		log.Printf("file found but no data nodes have responded with write confirmation")
+		return &proto.ReadFileResponse{DataNodes: availableNodes, Size: 0}, nil
+	}
+	for id := range fileEntry.Replicas {
 		dn, exist := node.DataNodes[id]
 		if !exist {
 			return nil, fmt.Errorf("data node id not recognized: %d", id)
@@ -211,6 +194,7 @@ func (node *NameNode) ReadFile(ctx context.Context, req *proto.ReadFileRequest) 
 		})
 
 	}
+	log.Printf("instructing client to read from: %v", availableNodes)
 	return &proto.ReadFileResponse{
 		Size:      fileEntry.Size,
 		DataNodes: availableNodes,
@@ -223,20 +207,22 @@ func (node *NameNode) DeleteFile(ctx context.Context, req *proto.DeleteFileReque
 	defer node.fmpMu.RUnlock()
 	node.dnMu.Lock()
 	defer node.dnMu.Unlock()
-	fileEntry, exist := node.Fmp[req.Hash]
-	if !exist {
-		return &proto.DeleteFileResponse{Success: false}, nil
+	file := node.Fmp.Delete(req.Hash)
+	if file == nil {
+		log.Println("tried to delete file that does not exist")
+		//TODO: Return error here if tried to delete file that DNE?
+		return &proto.DeleteFileResponse{Success: true}, nil
 	}
 	node.cmdMu.Lock()
 	defer node.cmdMu.Unlock()
-	for id := range fileEntry.Replicas {
+	for id := range file.Replicas {
 		if _, exist := node.Commands[id]; !exist {
 			return nil, fmt.Errorf("data node id not recognized: %d", id)
 		}
 		node.Commands[id] = append(node.Commands[id], &proto.Command{
 			Command: &proto.Command_Delete{
 				Delete: &proto.DeleteCommand{
-					FileInfo: fileEntry.FileInfo,
+					FileInfo: file.FileInfo,
 				},
 			},
 		})
@@ -256,21 +242,13 @@ func (node *NameNode) BlockReport(ctx context.Context, req *proto.BlockReportReq
 	peerDataNode.Used = req.Used
 	peerDataNode.Capacity = req.Capacity
 	node.fmpMu.Lock()
-	for _, file := range req.HeldFiles {
-		// for each file the data node tells us about,
-		// add it to the map
-		// create if not exist or assign newer file info
-		if _, exist := node.Fmp[file.Hash]; !exist {
-			node.Fmp[file.Hash] = NewFileEntry(file)
-		}
-		// add the node id into the list of replicas for the file
-		node.Fmp[file.Hash].Replicas[req.NodeId] = struct{}{}
-	}
-	node.fmpMu.Unlock()
 
-	node.cmdMu.Lock()
-	availableCommands, err := node.getCommands(req.NodeId)
-	node.cmdMu.Unlock()
+	for _, file := range req.HeldFiles {
+		node.Fmp.Record(file)
+		node.Fmp.AddReplica(file, req.NodeId)
+	}
+
+	node.fmpMu.Unlock()
 	if err != nil {
 		return nil, err
 		// try getting commands next iteration
@@ -283,7 +261,6 @@ func (node *NameNode) BlockReport(ctx context.Context, req *proto.BlockReportReq
 	fmt.Printf("succesfully received block report from %v", req.NodeId)
 	return &proto.BlockReportResponse{
 		NodeId:          node.Id,
-		Commands:        availableCommands,
 		NextReportDelay: uint64(node.BlockReportInterval),
 		ReportId:        req.LastReportId + 1,
 	}, nil
@@ -304,6 +281,10 @@ func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest
 		}
 		node.Commands[req.NodeId] = make([]*proto.Command, 0)
 	}
+	// log.Printf("received heartbeat from %v", req.NodeId)
+	node.fmpMu.RLock()
+	log.Printf("%v", node.Fmp.GetFilesArray())
+	node.fmpMu.RUnlock()
 	peerDataNode := node.DataNodes[req.NodeId]
 	peerDataNode.Alive = true
 	peerDataNode.Capacity = req.Capacity
@@ -316,7 +297,6 @@ func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest
 	if err != nil {
 		// try getting commands next iteration
 		// TODO: what happens if this goes on forever?
-
 		return &proto.HeartbeatResponse{
 			NodeId:             node.Id,
 			NextHeartbeatDelay: uint64(node.HeartbeatInterval),
@@ -333,7 +313,7 @@ func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest
 }
 
 func (node *NameNode) IncrementalBlockReport(ctx context.Context, req *proto.IncrementalBlockReportRequest) (reqp *proto.BlockReportResponse, err error) {
-	// block report
+	log.Printf("Handling incremental block report from %v", req.NodeId)
 	node.dnMu.Lock()
 	defer node.dnMu.Unlock()
 	peerDataNode, exist := node.DataNodes[req.NodeId]
@@ -344,35 +324,32 @@ func (node *NameNode) IncrementalBlockReport(ctx context.Context, req *proto.Inc
 	peerDataNode.LastSeen = time.Now()
 	node.fmpMu.Lock()
 	for _, update := range req.Updates {
-		fileHash := update.FileInfo.Hash
-		if _, exist := node.Fmp[fileHash]; !exist {
-			node.Fmp[fileHash] = NewFileEntry(update.FileInfo)
-		}
 		if update.Update == *proto.FileUpdate_UPDATE_ADD.Enum() {
-			node.Fmp[fileHash].Replicas[req.NodeId] = struct{}{}
+			// adding a new file
+			node.Fmp.Record(update.FileInfo)
+			node.Fmp.AddReplica(update.FileInfo, req.NodeId)
 		} else if update.Update == *proto.FileUpdate_UPDATE_DELETE.Enum() {
-			if _, exist := node.Fmp[fileHash].Replicas[node.Id]; exist {
-				delete(node.Fmp[fileHash].Replicas, node.Id)
+			// indicating that the data node has deleted a file that we have instructed it to delete
+			if node.Fmp.Has(update.FileInfo.Hash) == nil {
+				continue
 			}
+			// name node told data node to delete file (not really implemented for now)
+			// but technically in hdfds this is used for rebalancing
+			node.Fmp.RemoveReplica(update.FileInfo, req.NodeId)
 		}
 	}
 	node.fmpMu.Unlock()
 
-	node.cmdMu.Lock()
-	availableCommands, err := node.getCommands(req.NodeId)
-	node.cmdMu.Unlock()
 	if err != nil {
 		// try getting commands next iteration
 		// TODO: what happens if this goes on forever???
 		return &proto.BlockReportResponse{
-			NodeId:   node.Id,
-			Commands: nil,
+			NodeId: node.Id,
 		}, nil
 	}
 
 	return &proto.BlockReportResponse{
 		NodeId:          node.Id,
-		Commands:        availableCommands,
 		NextReportDelay: uint64(node.BlockReportInterval),
 	}, nil
 

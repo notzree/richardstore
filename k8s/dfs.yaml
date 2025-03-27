@@ -1,0 +1,153 @@
+# dfs.yaml
+# NameNode
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: namenode
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: namenode
+  template:
+    metadata:
+      labels:
+        app: namenode
+    spec:
+      containers:
+        - name: namenode
+          image: namenode:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NAMENODE_PORT
+              value: "3009"
+          ports:
+            - containerPort: 3009
+              name: namenode
+          volumeMounts:
+            - name: namenode-data
+              mountPath: /data
+      volumes:
+        - name: namenode-data
+          emptyDir: {} # For demo
+---
+# NameNode Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: namenode
+spec:
+  selector:
+    app: namenode
+  ports:
+    - port: 3009
+      targetPort: namenode
+  type: ClusterIP
+---
+# DataNode StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: datanode
+spec:
+  serviceName: "datanode"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: datanode
+  template:
+    metadata:
+      labels:
+        app: datanode
+    spec:
+      containers:
+        - name: datanode
+          image: datanode:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NAMENODE_ADDRESS
+              value: "namenode:3009"
+          ports:
+            - containerPort: 3000
+              name: data
+            - containerPort: 3001
+              name: data2
+            - containerPort: 3002
+              name: data3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {} # For a demo purposes
+---
+# DataNode Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: datanode
+spec:
+  selector:
+    app: datanode
+  ports:
+    - port: 3000
+      targetPort: data
+      name: data
+    - port: 3001
+      targetPort: data2
+      name: data2
+    - port: 3002
+      targetPort: data3
+      name: data3
+  clusterIP: None # This makes it a headless service
+---
+# Client Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: client
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: client
+  template:
+    metadata:
+      labels:
+        app: client
+    spec:
+      containers:
+        - name: client
+          image: client:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: NAMENODE_ADDRESS
+              value: "namenode:3009"
+            - name: PORT
+              value: ":8080"
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: client-data
+              mountPath: /data
+      volumes:
+        - name: client-data
+          emptyDir: {} # For demo
+---
+# Client Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: client
+spec:
+  selector:
+    app: client
+  ports:
+    - port: 80
+      targetPort: http
+  type: LoadBalancer
