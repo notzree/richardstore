@@ -21,6 +21,7 @@ func main() {
 	// Configure intervals
 	heartbeatInterval := 5 * time.Second
 	blockReportInterval := 1 * time.Minute
+	incrBlockReportInterval := 30 * time.Second
 
 	// Use persistent volume path if available
 	dataRoot := "/data"
@@ -42,6 +43,7 @@ func main() {
 		listenAddress,
 		heartbeatInterval,
 		blockReportInterval,
+		incrBlockReportInterval,
 		MAXSIMCOMMANDS,
 	)
 

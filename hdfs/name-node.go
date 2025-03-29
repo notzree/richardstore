@@ -64,14 +64,15 @@ type NameNode struct {
 	cmdMu     *sync.Mutex
 	Commands  map[uint64][]*proto.Command
 
-	MaxSimCommand       int
-	HeartbeatInterval   time.Duration
-	BlockReportInterval time.Duration
+	MaxSimCommand                  int
+	HeartbeatInterval              time.Duration
+	BlockReportInterval            time.Duration
+	IncrementalBlockReportInterval time.Duration
 
 	proto.UnimplementedNameNodeServer
 }
 
-func NewNameNode(Id uint64, address string, hbInterval time.Duration, blockReportInterval time.Duration, mxCmd int) *NameNode {
+func NewNameNode(Id uint64, address string, hbInterval time.Duration, blockReportInterval time.Duration, incrementalBlockReportInterval time.Duration, mxCmd int) *NameNode {
 	initialCommands := make(map[uint64][]*proto.Command)
 	dataNodeMap := make(map[uint64]*PeerDataNode)
 
@@ -80,7 +81,7 @@ func NewNameNode(Id uint64, address string, hbInterval time.Duration, blockRepor
 		address: address,
 
 		fmpMu: &sync.RWMutex{},
-		Fmp:   *NewFileMap("./snapshot.bin"),
+		Fmp:   *NewFileMap("./snapshot.bin", 1*time.Hour, 24*time.Hour),
 
 		dnMu:      &sync.RWMutex{},
 		DataNodes: dataNodeMap,
@@ -88,9 +89,10 @@ func NewNameNode(Id uint64, address string, hbInterval time.Duration, blockRepor
 		cmdMu:    &sync.Mutex{},
 		Commands: initialCommands,
 
-		HeartbeatInterval:   hbInterval,
-		BlockReportInterval: blockReportInterval,
-		MaxSimCommand:       mxCmd,
+		HeartbeatInterval:              hbInterval,
+		BlockReportInterval:            blockReportInterval,
+		IncrementalBlockReportInterval: incrementalBlockReportInterval,
+		MaxSimCommand:                  mxCmd,
 	}
 }
 
@@ -350,7 +352,7 @@ func (node *NameNode) IncrementalBlockReport(ctx context.Context, req *proto.Inc
 
 	return &proto.BlockReportResponse{
 		NodeId:          node.Id,
-		NextReportDelay: uint64(node.BlockReportInterval),
+		NextReportDelay: uint64(node.IncrementalBlockReportInterval),
 	}, nil
 
 }

@@ -11,6 +11,14 @@ import (
 	"github.com/notzree/richardstore/proto"
 )
 
+func init() {
+	// Register custom types with gob
+	gob.Register(&FileEntry{})
+	gob.Register(&DeletedFileEntry{})
+	gob.Register(map[uint64]interface{}{})
+	gob.Register(struct{}{}) // Register the empty struct used as a set value
+}
+
 type FileEntry struct {
 	*proto.FileInfo
 	Replicas map[uint64]interface{} // set containing list of data node ids that have the file
@@ -41,7 +49,7 @@ func NewFileEntry(fi *proto.FileInfo) *FileEntry {
 }
 
 type FileMap struct {
-	Mu           *sync.RWMutex
+	mu           *sync.RWMutex
 	Files        map[string]*FileEntry
 	DeletedFiles map[string]*DeletedFileEntry // Key is composite of hash + generation stamp
 	SnapshotPath string
@@ -50,17 +58,17 @@ type FileMap struct {
 	RetentionPeriod time.Duration
 }
 
-func NewFileMap(snapshotPath string) *FileMap {
+func NewFileMap(snapshotPath string, garbageCollectionInterval time.Duration, retentionPeriod time.Duration) *FileMap {
 	loadedMap, err := Load(snapshotPath)
 	if err != nil {
 		log.Print("err loading filemap from path, defaulting to empty filemap\n")
 		fileMap := &FileMap{
-			Mu:              &sync.RWMutex{},
+			mu:              &sync.RWMutex{},
 			Files:           make(map[string]*FileEntry),
 			DeletedFiles:    make(map[string]*DeletedFileEntry),
 			SnapshotPath:    snapshotPath,
-			GCInterval:      1 * time.Hour,
-			RetentionPeriod: 24 * time.Hour,
+			GCInterval:      garbageCollectionInterval,
+			RetentionPeriod: retentionPeriod,
 		}
 
 		// Start the garbage collection routine
@@ -77,8 +85,8 @@ func NewFileMap(snapshotPath string) *FileMap {
 }
 
 func (fileMap *FileMap) GetFilesArray() []*FileEntry {
-	fileMap.Mu.RLock()
-	defer fileMap.Mu.RUnlock()
+	fileMap.mu.RLock()
+	defer fileMap.mu.RUnlock()
 
 	// Create a slice with capacity equal to the number of files
 	files := make([]*FileEntry, 0, len(fileMap.Files))
@@ -107,9 +115,9 @@ func (fileMap *FileMap) Record(file *proto.FileInfo) {
 	if fileMap.IsDeleted(file.Hash, file.GenerationStamp) {
 		return
 	}
-	// isDeleted locks mutex so we acquire lock ATF
-	fileMap.Mu.Lock()
-	defer fileMap.Mu.Unlock()
+	// isDeleted locks mutex so we acquire lock after
+	fileMap.mu.Lock()
+	defer fileMap.mu.Unlock()
 
 	// File doesnt exist
 	if _, exist := fileMap.Files[file.Hash]; !exist {
@@ -132,8 +140,8 @@ func (fileMap *FileMap) AddReplica(file *proto.FileInfo, nodeId uint64) error {
 	if fileMap.Has(file.Hash) == nil {
 		return fmt.Errorf("cannot add replica to non-existent file")
 	}
-	fileMap.Mu.Lock()
-	defer fileMap.Mu.Unlock()
+	fileMap.mu.Lock()
+	defer fileMap.mu.Unlock()
 
 	entry := fileMap.Files[file.Hash]
 
@@ -151,8 +159,8 @@ func (fileMap *FileMap) RemoveReplica(file *proto.FileInfo, nodeId uint64) error
 		return fmt.Errorf("cannot remove replica to non-existent file")
 	}
 
-	fileMap.Mu.Lock()
-	defer fileMap.Mu.Unlock()
+	fileMap.mu.Lock()
+	defer fileMap.mu.Unlock()
 	entry := fileMap.Files[file.Hash]
 	if entry.Replicas == nil {
 		// Already no replicas
@@ -164,8 +172,8 @@ func (fileMap *FileMap) RemoveReplica(file *proto.FileInfo, nodeId uint64) error
 
 // threadsafe operation to check if a file with a given hash exists
 func (filemap *FileMap) Has(hash string) *FileEntry {
-	filemap.Mu.RLock()
-	defer filemap.Mu.RUnlock()
+	filemap.mu.RLock()
+	defer filemap.mu.RUnlock()
 	if entry, exist := filemap.Files[hash]; !exist {
 		return nil
 	} else {
@@ -175,8 +183,8 @@ func (filemap *FileMap) Has(hash string) *FileEntry {
 
 // Delete deletes a file.
 func (fileMap *FileMap) Delete(hash string) *FileEntry {
-	fileMap.Mu.Lock()
-	defer fileMap.Mu.Unlock()
+	fileMap.mu.Lock()
+	defer fileMap.mu.Unlock()
 
 	file, exist := fileMap.Files[hash]
 	if !exist {
@@ -197,8 +205,8 @@ func (fileMap *FileMap) Delete(hash string) *FileEntry {
 
 // Is deleted will check if a given hash + generation stamp has been deleted or not.
 func (fileMap *FileMap) IsDeleted(hash string, generationStamp uint64) bool {
-	fileMap.Mu.RLock()
-	defer fileMap.Mu.RUnlock()
+	fileMap.mu.RLock()
+	defer fileMap.mu.RUnlock()
 
 	key := makeDeletedFileKey(hash, generationStamp)
 	_, exists := fileMap.DeletedFiles[key]
@@ -207,8 +215,8 @@ func (fileMap *FileMap) IsDeleted(hash string, generationStamp uint64) bool {
 
 // Snapshot saves the map to disk encoding it with GOB
 func (filemap *FileMap) Snapshot() error {
-	filemap.Mu.RLock()
-	defer filemap.Mu.RUnlock()
+	filemap.mu.RLock()
+	defer filemap.mu.RUnlock()
 
 	file, err := os.Create(filemap.SnapshotPath)
 	if err != nil {
@@ -224,7 +232,7 @@ func (filemap *FileMap) Snapshot() error {
 	return nil
 }
 
-// Load laods a Filemap from disk using GOB
+// Load loads a Filemap from disk using GOB
 func Load(path string) (*FileMap, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -240,16 +248,18 @@ func Load(path string) (*FileMap, error) {
 	}
 
 	// Initialize mutex if it's nil after loading
-	if filemap.Mu == nil {
-		filemap.Mu = &sync.RWMutex{}
+	if filemap.mu == nil {
+		filemap.mu = &sync.RWMutex{}
+	}
+	if filemap.DeletedFiles == nil {
+		filemap.DeletedFiles = make(map[string]*DeletedFileEntry)
 	}
 
 	return &filemap, nil
 }
 
 func (fileMap *FileMap) runGarbageCollection() {
-	fileMap.Mu.Lock()
-	defer fileMap.Mu.Unlock()
+	fileMap.mu.Lock()
 
 	now := time.Now()
 	deleteCount := 0
@@ -261,12 +271,11 @@ func (fileMap *FileMap) runGarbageCollection() {
 			deleteCount++
 		}
 	}
-
+	fileMap.mu.Unlock()
 	if deleteCount > 0 {
 		log.Printf("Garbage collection removed %d expired deletion records\n", deleteCount)
 
 		// Take a snapshot after GC
-		// Note: Snapshot method doesn't need changes since it accesses the map via the receiver
 		if err := fileMap.Snapshot(); err != nil {
 			log.Printf("Failed to create snapshot after garbage collection: %v\n", err)
 		}
