@@ -317,7 +317,7 @@ func TestCommandPropagation(t *testing.T) {
 	nameNode.cmdMu.Unlock()
 
 	// Wait for heartbeat to deliver the command and for replication to complete
-	time.Sleep(heartbeatInterval * 2)
+	time.Sleep(blockReportInterval * 2)
 
 	// Verify file is now on both DataNodes
 	fileEntry = nameNode.Fmp.Has(hash)
