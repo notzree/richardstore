@@ -1042,7 +1042,7 @@ func (x *IncrementalBlockReportRequest) GetUpdates() []*FileUpdate {
 }
 
 // updated file
-// this pattern is lowky gross lol
+// this pattern is suboptimal and could be improved
 type FileUpdate struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	FileInfo      *FileInfo              `protobuf:"bytes,1,opt,name=file_info,json=fileInfo,proto3" json:"file_info,omitempty"`

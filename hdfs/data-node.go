@@ -18,12 +18,16 @@ import (
 type PeerDataNode struct {
 	Id       uint64
 	Address  string
-	Alive    bool
 	LastSeen time.Time
 	// in bytes
 	Capacity uint64
 	Used     uint64
 }
+
+func (n *PeerDataNode) Alive(heartbeatInterval time.Duration) bool {
+	return time.Since(n.LastSeen) <= heartbeatInterval
+}
+
 type DataNodeClient struct {
 	conn   *grpc.ClientConn
 	client proto.DataNodeClient
@@ -120,13 +124,19 @@ func (node *DataNode) Run() error {
 	go node.StartRPCServer()
 	go node.HandleCommands()
 	go node.HandleBlockReport()
+	go node.HandleIncrementalBlockreport()
 	select {
 	case err := <-node.errChan:
 		log.Printf("err detected!")
 		// Initiate shutdown
 		close(node.doneChan)
 		return fmt.Errorf("server error: %w", err)
+	case <-node.doneChan:
+		return nil
 	}
+}
+func (node *DataNode) Stop() {
+	close(node.doneChan)
 }
 
 func (node *DataNode) StartRPCServer() error {
@@ -328,7 +338,7 @@ func (node *DataNode) SendHeartbeat() (time.Duration, error) {
 func (node *DataNode) HandleHeartbeat() {
 	// max consecutive retries
 	MAX_RETRIES := node.MAX_RETRIES
-	interval := 5 * time.Second
+	interval := 2 * time.Second
 	ticker := time.NewTicker(interval)
 	success := false
 	defer ticker.Stop()
@@ -511,7 +521,6 @@ func (node *DataNode) HandleCommands() {
 		case <-node.doneChan:
 			return
 		case cmd := <-node.cmdChan:
-			log.Printf("received cmd %v", cmd)
 			switch c := cmd.Command.(type) {
 			case *proto.Command_Replicate:
 				err := node.handleReplication(c.Replicate)
@@ -563,11 +572,14 @@ func (node *DataNode) handleReplication(cmd *proto.ReplicateCommand) error {
 		log.Printf("end of replication chain reached with node %d", node.Id)
 		return nil
 	}
-
 	target := cmd.TargetNodes[0]
+	downstream := make([]*proto.DataNodeInfo, 0)
+	if len(cmd.TargetNodes) > 1 {
+		downstream = cmd.TargetNodes[1:]
+	}
 	downstreamInfo := &proto.StreamInfo{
 		FileInfo:  cmd.FileInfo,
-		DataNodes: cmd.TargetNodes[1:],
+		DataNodes: downstream,
 	}
 	ctx := context.Background()
 	replicator, err := NewReplicator(ctx, target.Address, downstreamInfo)
@@ -627,7 +639,6 @@ func (node *DataNode) PeerRepresentation() *PeerDataNode {
 	return &PeerDataNode{
 		Id:       node.Id,
 		Address:  node.address,
-		Alive:    true,
 		LastSeen: time.Now(),
 		Capacity: capacity,
 		Used:     used,

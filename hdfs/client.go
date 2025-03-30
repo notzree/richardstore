@@ -74,7 +74,9 @@ func (c *Client) write(file *os.File, minRepFactor float32) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	log.Print(nameNodeResp.DataNodes)
+	if len(nameNodeResp.DataNodes) == 0 {
+		return "", fmt.Errorf("name node err, no nodes returned")
+	}
 	_, err = file.Seek(0, io.SeekStart)
 	if err != nil {
 		return "", err

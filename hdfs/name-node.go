@@ -63,6 +63,7 @@ type NameNode struct {
 	DataNodes map[uint64]*PeerDataNode
 	cmdMu     *sync.Mutex
 	Commands  map[uint64][]*proto.Command
+	server    *grpc.Server
 
 	MaxSimCommand                  int
 	HeartbeatInterval              time.Duration
@@ -119,6 +120,25 @@ func (node *NameNode) Run() error {
 	// Add more event loops as required
 	return node.StartRPCServer()
 }
+func (node *NameNode) Stop() {
+	// Create a context with timeout for graceful shutdown
+	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// Close any open connections
+	if node.server != nil {
+		node.server.GracefulStop()
+	}
+
+	// Save state if needed
+	node.fmpMu.Lock()
+	if err := node.Fmp.Snapshot(); err != nil {
+		log.Printf("Error saving file map to disk: %v", err)
+	}
+	node.fmpMu.Unlock()
+
+	log.Printf("NameNode %d stopped gracefully", node.Id)
+}
 
 func (node *NameNode) StartRPCServer() error {
 	ln, err := net.Listen("tcp", node.address)
@@ -126,32 +146,32 @@ func (node *NameNode) StartRPCServer() error {
 		return err
 	}
 	opts := []grpc.ServerOption{}
-	server := grpc.NewServer(opts...)
-	proto.RegisterNameNodeServer(server, node)
+	node.server = grpc.NewServer(opts...)
+	proto.RegisterNameNodeServer(node.server, node)
 	log.Printf("starting name node server on port %s\n", node.address)
-	return server.Serve(ln)
+	return node.server.Serve(ln)
 }
 
 func (node *NameNode) WriteFile(ctx context.Context, req *proto.WriteFileRequest) (resp *proto.CreateFileResponse, err error) {
 	node.dnMu.RLock()
 	defer node.dnMu.RUnlock()
 
-	nodes := make([]*proto.DataNodeInfo, 0)
 	incoming_file := req.FileInfo
 
 	// record the initial file that the client sends to the name node.
 	node.Fmp.Record(incoming_file)
 
 	// calculate the number of required nodes to store this file
-	numRequiredNodes := int(incoming_file.MinReplicationFactor * float32(len(node.DataNodes)))
+	numRequiredNodes := max(1, int(incoming_file.MinReplicationFactor*float32(len(node.DataNodes))))
 	log.Printf("total number of nodes: %v", len(node.DataNodes))
 	log.Printf("number of required nodes to store: %v", numRequiredNodes)
 	// in the future I would make this a heap thing
+	nodes := make([]*proto.DataNodeInfo, 0)
 	for _, dataNode := range node.DataNodes {
 		if len(nodes) >= numRequiredNodes {
 			break
 		}
-		if !dataNode.Alive || (dataNode.Capacity-dataNode.Used) < incoming_file.Size {
+		if !dataNode.Alive(node.HeartbeatInterval) || (dataNode.Capacity-dataNode.Used) < incoming_file.Size {
 			continue
 		}
 
@@ -176,7 +196,6 @@ func (node *NameNode) ReadFile(ctx context.Context, req *proto.ReadFileRequest) 
 	fileEntry := node.Fmp.Has(req.Hash)
 	if fileEntry == nil {
 		log.Print("file not found\n")
-		log.Printf("known files:\n %v", node.Fmp)
 		// do we return empty or throw error!?
 		return &proto.ReadFileResponse{DataNodes: availableNodes, Size: 0}, nil
 	}
@@ -191,10 +210,17 @@ func (node *NameNode) ReadFile(ctx context.Context, req *proto.ReadFileRequest) 
 		if !exist {
 			return nil, fmt.Errorf("data node id not recognized: %d", id)
 		}
+		if !dn.Alive(node.HeartbeatInterval) {
+			//todo: Should we remove this node from the replica?
+			continue
+		}
 		availableNodes = append(availableNodes, &proto.DataNodeInfo{
 			Address: dn.Address,
 		})
 
+	}
+	if len(availableNodes) == 0 {
+		return nil, fmt.Errorf("critical error, all replicas are down")
 	}
 	log.Printf("instructing client to read from: %v", availableNodes)
 	return &proto.ReadFileResponse{
@@ -239,7 +265,6 @@ func (node *NameNode) BlockReport(ctx context.Context, req *proto.BlockReportReq
 	if !exist {
 		return nil, fmt.Errorf("data node id not recognized: %d", req.NodeId)
 	}
-	peerDataNode.Alive = true
 	peerDataNode.LastSeen = time.Now()
 	peerDataNode.Used = req.Used
 	peerDataNode.Capacity = req.Capacity
@@ -276,7 +301,6 @@ func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest
 		node.DataNodes[req.NodeId] = &PeerDataNode{
 			Id:       req.NodeId,
 			Address:  req.Address, // actually port right now (feb 10th 2025)
-			Alive:    true,
 			LastSeen: time.Now(),
 			Capacity: req.Capacity,
 			Used:     req.Used,
@@ -284,11 +308,7 @@ func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest
 		node.Commands[req.NodeId] = make([]*proto.Command, 0)
 	}
 	// log.Printf("received heartbeat from %v", req.NodeId)
-	node.fmpMu.RLock()
-	log.Printf("%v", node.Fmp.GetFilesArray())
-	node.fmpMu.RUnlock()
 	peerDataNode := node.DataNodes[req.NodeId]
-	peerDataNode.Alive = true
 	peerDataNode.Capacity = req.Capacity
 	peerDataNode.Used = req.Used
 	peerDataNode.LastSeen = time.Now()
@@ -315,14 +335,13 @@ func (node *NameNode) Heartbeat(ctx context.Context, req *proto.HeartbeatRequest
 }
 
 func (node *NameNode) IncrementalBlockReport(ctx context.Context, req *proto.IncrementalBlockReportRequest) (reqp *proto.BlockReportResponse, err error) {
-	log.Printf("Handling incremental block report from %v", req.NodeId)
+	// log.Printf("Handling incremental block report from %v", req.NodeId)
 	node.dnMu.Lock()
 	defer node.dnMu.Unlock()
 	peerDataNode, exist := node.DataNodes[req.NodeId]
 	if !exist {
 		return nil, fmt.Errorf("data node id not recognized: %d", req.NodeId)
 	}
-	peerDataNode.Alive = true
 	peerDataNode.LastSeen = time.Now()
 	node.fmpMu.Lock()
 	for _, update := range req.Updates {
@@ -378,7 +397,7 @@ func (node *NameNode) Info(ctx context.Context, _ *emptypb.Empty) (*proto.NameNo
 
 	dataNodes := make([]*proto.DataNodeInfo, 0, len(node.DataNodes))
 	for _, dn := range node.DataNodes {
-		if !dn.Alive {
+		if !dn.Alive(node.HeartbeatInterval) {
 			continue
 		}
 		dataNodes = append(dataNodes, &proto.DataNodeInfo{

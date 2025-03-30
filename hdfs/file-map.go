@@ -111,8 +111,8 @@ func (fileMap *FileMap) GetFilesArray() []*FileEntry {
 // Record will automatically ignore any previously files
 func (fileMap *FileMap) Record(file *proto.FileInfo) {
 	// Check if this exact file (hash + generation stamp) was previously deleted
-
 	if fileMap.IsDeleted(file.Hash, file.GenerationStamp) {
+		log.Printf("Recorded a file that has already been deleted, ignoring...")
 		return
 	}
 	// isDeleted locks mutex so we acquire lock after
