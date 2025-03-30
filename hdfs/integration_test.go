@@ -27,8 +27,8 @@ const (
 	// Config parameters
 	maxSimCommands                 = 10
 	heartbeatInterval              = 1 * time.Second
-	blockReportInterval            = 2 * time.Second
-	incrementalBlockReportInterval = 2 * time.Second
+	blockReportInterval            = 5 * time.Second
+	incrementalBlockReportInterval = 5 * time.Second
 	maxRetries                     = 3
 )
 
@@ -213,7 +213,7 @@ func TestBasicNodeIntegration(t *testing.T) {
 	hash := writeFileToHDFSUsingClient(t, client, content, 0.7) // 2/3 of the nodes
 
 	// Wait for block reports to propogate back to name node
-	time.Sleep(blockReportInterval * 2)
+	time.Sleep(blockReportInterval)
 
 	// Verify file is recorded in NameNode's FileMap
 	fileEntry := nameNode.Fmp.Has(hash)
@@ -273,7 +273,7 @@ func TestCommandPropagation(t *testing.T) {
 	hash := writeFileToHDFSUsingClient(t, client, content, 0.34) // 1/3 of the nodes
 
 	// Wait for block reports to propagate
-	time.Sleep(blockReportInterval * 2)
+	time.Sleep(blockReportInterval)
 
 	// Verify file is on only one DataNode
 	fileEntry := nameNode.Fmp.Has(hash)
@@ -317,7 +317,7 @@ func TestCommandPropagation(t *testing.T) {
 	nameNode.cmdMu.Unlock()
 
 	// Wait for heartbeat to deliver the command and for replication to complete
-	time.Sleep(blockReportInterval * 2)
+	time.Sleep(blockReportInterval)
 
 	// Verify file is now on both DataNodes
 	fileEntry = nameNode.Fmp.Has(hash)
@@ -352,7 +352,7 @@ func TestFailureRecovery(t *testing.T) {
 	hash := writeFileToHDFSUsingClient(t, client, content, 1.0) // Ensure it goes to all nodes
 
 	// Wait for block reports to propagate
-	time.Sleep(blockReportInterval * 3)
+	time.Sleep(blockReportInterval)
 
 	// Verify file is on both DataNodes
 	fileEntry := nameNode.Fmp.Has(hash)
