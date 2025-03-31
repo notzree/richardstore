@@ -33,7 +33,7 @@ https://github.com/user-attachments/assets/c7d479ca-6538-4401-b7d8-f7e4651a6608
 
 
 
-## Yapping
+## explanation
 ### CAS File storage
 CAS (Content Addressable Storage) is a type of file system that stores data based on its content, rather than its location. This allows for efficient retrieval and deduplication of data.
 This is all implemented in the store/storage.go file, where the Store class provides concurency safe methods for interacting with the storage system.
@@ -59,6 +59,10 @@ richardstore is similar to HDFS. It has a namenode, and a series of datanodes.
 A namenode manages the file system metadata, things like location of files, which datanodes have which files, health of datanodes, etc.
 The datanodes store the actual files (blocks in hdfs). All inter-system communication is done with gRPC, and the client exposes a REST HTTP endpoint for ease of use.
 You can find the full hdfs architecture guide [here](https://hadoop.apache.org/docs/r1.2.1/hdfs_design.html)
+
+At a highlevel, this is what richardstore looks like:
+
+<img width="986" alt="image" src="https://github.com/user-attachments/assets/8420186e-c474-43a6-ab3a-593fd243d354" />
 
 
 ### BlockReports
