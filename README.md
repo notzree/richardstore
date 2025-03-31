@@ -1,6 +1,7 @@
 # richardstore
 richardstore is a distributed CAS file storage I built as a learning exercise.
 richardstore is based off of the Hadoop distributed file system, and uses Go, k8s, and gRPC. Its also possible to run it without k8s if desired.
+richardstore supports: read, write, delete, operations. 
 
 ## installation
 requirements:
@@ -23,6 +24,12 @@ kubectl port-forward service/client 8080:80
 This should create the required k3d cluster, build all the docker images, and run the cluster.
 You should be able to go to http://localhost:8080/ and see this:
 
+<img width="852" alt="image" src="https://github.com/user-attachments/assets/0d0f0acd-29fc-4932-961d-5448217f48b0" />
+
+
+File Upload Demo:
+
+https://github.com/user-attachments/assets/c7d479ca-6538-4401-b7d8-f7e4651a6608
 
 
 
