@@ -64,6 +64,13 @@ At a highlevel, this is what richardstore looks like:
 
 <img width="986" alt="image" src="https://github.com/user-attachments/assets/8420186e-c474-43a6-ab3a-593fd243d354" />
 
+### Heartbeats
+The datanode uses heartbeats to inform the namenode that it is alive and can handle read traffic. It is also what is used to transfer commands between the two nodes.
+If a datanode doesnt send a heartbeat after a specified interval, the namenode will mark that node as dead and will not direct any traffic to it until it starts sending heartbeats again. This and file replication allows for certain levels of fault tolerance.
+If a node is dead, other nodes can serve the same data and cover for it until the node is up. The namenode can also issue replication commands to datanodes. 
+For example, if a file is held by 3/5 nodes in the file system, and 2 nodes go down, the namenode can detect this and when the last node sends a heartbeat, issue a replication command to duplicate the file to the other 2 nodes in the file system to ensure that the file is still held by atleast 3/5 nodes in the system. 
+
+
 
 ### BlockReports
 Blockreports are what the datanodes use to tell the namenode what files they have. The namenodes upon receiving this update their internal map of file -> datanodes for future read operations. A blockreport is basically just a list of all of the files that a datanode has. An incremental block report is essentially a compressed version of the blockreport which only tracks the changes that have happened on the file system (adding/deleting a file)
