@@ -1,7 +1,10 @@
 # richardstore
-richardstore is a distributed CAS file storage I built as a learning exercise.
-richardstore is based off of the Hadoop distributed file system, and uses Go, k8s, and gRPC. Its also possible to run it without k8s if desired.
-richardstore supports: read, write, delete, operations. 
+A reliable file storage system inspired by enterprise solutions that automatically stores backup copies of files across multiple computers. When one storage node fails, the system detects this and ensures files remain accessible. Built as a learning project to demonstrate how large-scale storage systems maintain data reliability.
+
+Key features:
+- Stores files reliably with automatic backup copies across multiple storage nodes
+- Self-healing system that detects when a storage node fails and creates new backup copies
+- Simple API for uploading, downloading, and managing files
 
 ## installation
 requirements:
