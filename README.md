@@ -31,7 +31,100 @@ File Upload Demo:
 
 https://github.com/user-attachments/assets/c7d479ca-6538-4401-b7d8-f7e4651a6608
 
+## Client API ref
 
+### Upload a File
+
+Upload a file to the distributed file system.
+
+**URL**: `/upload`
+
+**Method**: `POST`
+
+**Content-Type**: `multipart/form-data`
+
+**Form Parameters**:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| file      | File | Yes      | The file to upload |
+
+**Response**:
+```json
+{
+  "hash": "string"
+}
+```
+**Error Response**:
+
+```json
+{
+  "error": "string"
+}
+```
+**Example**:
+
+```bash
+curl -X POST \
+  http://localhost:8080/upload \
+  -F 'file=@/path/to/your/file.txt'
+```
+### Download a File
+
+Download a file from the distributed file system using its hash.
+
+**URL**: `/download`
+
+**Method**: `GET`
+
+**Query Parameters**:
+
+| Parameter | Type   | Required | Description                                |
+|-----------|--------|----------|--------------------------------------------|
+| hash      | string | Yes      | The hash identifier of the file to download |
+
+**Response**:
+
+The binary content of the requested file.
+
+**Error Response**:
+
+```json
+{
+  "error": "string"
+}
+```
+
+**Example**:
+
+```bash
+curl -X GET \
+  'http://localhost:8080/download?hash=abc123' \
+  --output downloaded_file.txt
+```
+
+### Get System Information
+
+Retrieve information about the distributed file system.
+
+**URL**: `/info`
+
+**Method**: `GET`
+
+**Response**:
+
+```json
+{
+  "service": "Distributed File System",
+  "status": "running",
+  "namenode": "string"
+}
+```
+**Example**:
+
+```bash
+curl -X GET http://localhost:8080/info
+```
 
 ## explanation
 ### CAS File storage
